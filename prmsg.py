@@ -26,7 +26,7 @@ def uptime() -> float:
 
 output_file:TextIO = sys.stdout
 quiet:bool = False
-debug_mode:bool = False
+debug:bool = False
 
 def change_output(f_name:str):
     global output_file
@@ -51,8 +51,8 @@ def pr_msg(msg: str, level:str='INFO', new_line_before:bool=False, new_line_afte
     if quiet:
         return
 
-    if level == 'DEBUG' and not debug_mode:
-        return
+#    if level == 'DEBUG' and not debug:
+#        return
 
     if new_line_before or (Pbar.in_pbar != 0 and std_outputs):
         msg = '\n' + msg

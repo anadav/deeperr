@@ -8,6 +8,9 @@ import io
 import abc
 import struct
 import os
+import zstandard as zstd
+import lief
+from intervaltree import IntervalTree
 from enum import Enum
 from prmsg import pr_msg
 from collections import defaultdict
@@ -65,10 +68,20 @@ def find_module_dbg(module_name:str):
                     return os.path.join(root, file)
     return None
 
+lief_to_angr_type_map:Dict[Any, angr.cle.backends.SymbolType] = {
+    lief.ELF.Symbol.TYPE.OBJECT: angr.cle.backends.SymbolType.TYPE_OBJECT,
+    lief.ELF.Symbol.TYPE.FUNC: angr.cle.backends.SymbolType.TYPE_FUNCTION,
+    lief.ELF.Symbol.TYPE.FILE: angr.cle.backends.SymbolType.TYPE_OTHER,
+    lief.ELF.Symbol.TYPE.SECTION: angr.cle.backends.SymbolType.TYPE_SECTION,
+    lief.ELF.Symbol.TYPE.COMMON: angr.cle.backends.SymbolType.TYPE_OTHER,
+    lief.ELF.Symbol.TYPE.TLS: angr.cle.backends.SymbolType.TYPE_TLS_OBJECT,
+    lief.ELF.Symbol.TYPE.GNU_IFUNC: angr.cle.backends.SymbolType.TYPE_OTHER,
+}
+
 class Kallsyms:
     def __init__(self, objs:List[io.BufferedReader]):
-        parsed_modules = self.parse_proc_modules()
-        self.__find_modules(parsed_modules)
+        self.parsed_modules = self.parse_proc_modules()
+        self.__find_modules()
 
         self.keep_sym_types: Set[str] = {'t', 'T', 'w', 'W', 'r', 'R'}
         self.type_map:Dict[str, angr.cle.backends.SymbolType] = {
@@ -88,74 +101,208 @@ class Kallsyms:
                     'W':angr.cle.backends.SymbolType.TYPE_OTHER,
         }
 
-        all_syms = self.__read_symbols()
-        all_segments = self.__analyze_sections(all_syms)
-        self.exes = dict()
+        #self.remapped_module_sections = self.read_module_sections()
+        self.intervals = IntervalTree()
 
         obj_basenames = {self.__get_basename(pathlib.Path(f.name).stem):f for f in objs}
 
-        def get_obj_base_sz(obj_name:str, syms) -> Tuple[int, int]:
-            if obj_name == 'vmlinux':
-                min_addr = next(s[1] for s in syms if s[0] == '_stext')
-                max_addr = next(s[1] for s in syms if s[0] == '_end')
-                sz = max_addr - min_addr
-            elif obj_name in parsed_modules:
-                min_addr = parsed_modules[obj_name]['address']
-                sz = int(parsed_modules[obj_name]['size'])
-            else:
+        self.remapped_syms = self.__read_symbols()
+
+        for module, syms in self.remapped_syms.items():
+            if module.startswith('__builtin') or module.startswith('bpf:'):
                 min_addr = self.__get_min_addr(syms)
                 max_addr = self.__get_max_addr(syms)
                 sz = max_addr - min_addr
+                self.intervals[min_addr:max_addr] = module
 
-            return min_addr, sz
+        self.exes = dict()
 
+        self.__read_module_syms(obj_basenames)
 
-        for obj_name, syms in all_syms.items():
-            mapped_addr, sz = get_obj_base_sz(obj_name, syms)
+        vmlinux_base, vmlinux_rebased_syms = self.__read_vmlinux_syms(obj_basenames)
 
-            path = None
-            if obj_name in obj_basenames:
-                path = obj_basenames[obj_name].name
-            elif obj_name in parsed_modules:
-                path = parsed_modules[obj_name].get('path')
+        #all_segments = self.__prevent_section_overlap(all_segments)
 
-            if path is not None:
-                with open(path, 'rb') as f:
-                    if not self.check_build_id(f):
-                        pr_msg(f'Build ID mismatch for {obj_name}', level='WARN')
-                        path = None
- 
-            self.exes[obj_name] = {
-                'mapped_addr': mapped_addr,
-                'base_addr': arch.default_text_base if obj_name == 'vmlinux' else 0,
+        remapped_linux_addr = next(s[1] for s in self.remapped_syms['vmlinux'] if s[0] == '_stext')
+        end_addr = next(s[1] for s in self.remapped_syms['vmlinux'] if s[0] == '_end')
+        self.exes['vmlinux'] = {
+            'mapped_addr': remapped_linux_addr,
+            'base_addr': arch.default_text_base,
+            'size': end_addr - remapped_linux_addr,
+            'symbols': vmlinux_rebased_syms,
+            'path': obj_basenames['vmlinux'].name,
+            'segments': self.__kernel_sections(self.remapped_syms),
+        }
+
+        # create sorted list of (module-address, module-name)
+        sorted_modules_list = sorted(self.parsed_modules.items(), key=lambda x: x[1]['address'])
+
+        next_module_start = dict()
+        # match each module with the next start
+        for i, (module, module_info) in enumerate(sorted_modules_list):
+            next_module_start[module] = (None if i == len(sorted_modules_list) - 1 else 
+                                        sorted_modules_list[i + 1][1]['address'])
+
+        for non_module in self.remapped_syms.keys() - self.parsed_modules.keys() - {'vmlinux'}:
+            syms = self.remapped_syms[non_module]
+            min_addr = self.__get_min_addr(syms)
+            max_addr = self.__get_max_addr(syms)
+            sz = max_addr - min_addr
+            self.exes[non_module] = {
+                'mapped_addr': min_addr,
+                'base_addr': 0,
                 'size': sz,
-                'symbols': [],
-                'path': path,
-                'segments': all_segments[obj_name],
+                'symbols': self.__relative_symbol_tuples(syms, min_addr, sz),
+                'path': None,
+                'segments': [(min_addr, max_addr)],
             }
-            
+
+        del self.intervals
+
+    def __fix_sym_sizes(self, remapped_syms:List[Tuple[str, int, str, Optional[int]]], base_syms:List[Tuple[str, int, str, Optional[int]]]):
+        # Change remapped_syms into dict
+        base_syms_dict = {s[0]:s for s in base_syms}
+
+        # Take the size from base_syms_dict, everything else from remapped_syms_dict
+        return [(s[0], s[1], s[2], base_syms_dict[s[0]][3]) for s in remapped_syms]
+
+
+    def __read_module_syms(self, obj_basenames:Dict[str, io.BufferedReader]) -> Dict[str, List[Tuple[str, int, str, Optional[int]]]]:
+        obj_names = self.remapped_syms.keys()
+        parsed_module_names = self.parsed_modules.keys()
+        rebased_syms = dict()
+
+        for obj_name in obj_names & parsed_module_names:
+            path = (obj_basenames[obj_name].name if obj_name in obj_basenames
+                    else self.parsed_modules[obj_name].get('path'))
+
             if path is None:
-                self.exes[obj_name]['symbols'] = self.__relative_symbol_tuples(syms, mapped_addr, sz)
-                continue
-           
-            try:
-                with open(path, 'rb') as f:
-                    base_syms = self.__read_sizes(f)
-            except FileNotFoundError as e:
-                pr_msg(f'Could not find file {f}: {e}', level='WARN')
                 continue
 
-            base_addr, _ = get_obj_base_sz(obj_name, base_syms)
-            rebased_syms = self.__relative_symbol_tuples(base_syms, base_addr, sz)
-           
-            # Complicated since mypy doesn't like direct assignment
-            self.exes[obj_name].update({
-                'base_addr': base_addr,
-                'symbols': rebased_syms,
-            })
+            binary = lief.parse(path)
 
-    def __find_modules(self, parsed_modules):
+            # Check build-id
+            for note in binary.notes:
+                if note.type == 3 and note.name == "GNU":
+                    build_id = note.description.hex()
+            live_build_id = Kallsyms.get_module_build_id(obj_name)
+            if live_build_id != build_id:
+                raise Exception(f"Build ID mismatch for {obj_name}")
+
+            sections = {}
+            for section in binary.sections:
+                if not section.has(lief.ELF.Section.FLAGS.ALLOC) or section.has(lief.ELF.Section.FLAGS.WRITE):
+                    continue
+
+                if section.name.startswith('.note'):
+                    continue
+
+                sections[section.name] = {
+                    'address': section.virtual_address,
+                    'size': section.size,
+                    'symbols': []
+                }
+
+            # Populate the dictionary with symbols
+            for symbol in binary.symbols:
+                if symbol.name != '' and symbol.size != 0 and symbol.section is not None and symbol.section.name in sections:
+                    symbol_info = (
+                        symbol.name,
+                        symbol.value,
+                        lief_to_angr_type_map[symbol.type],
+                        symbol.size
+                    )
+                    sections[symbol.section.name]['symbols'].append(symbol_info)
+
+            live_sections = Kallsyms.read_live_module_sections(obj_name)
+
+            for section_name, section_mapped_addr in live_sections.items():
+                if section_name not in sections:
+                    continue
+
+                section = sections[section_name]
+
+                symbols = section['symbols']
+                if len(symbols) == 0:
+                    continue
+
+                self.exes[f'{obj_name}:{section_name}'] = {
+                    'mapped_addr': section_mapped_addr,
+                    'base_addr': section['address'],
+                    'size': section['size'],
+                    'symbols': symbols,
+                    'path': self.parsed_modules[obj_name].get('path'),
+                    'segments': [(section_mapped_addr, section_mapped_addr + section['size'])],
+                }
+
+        for exe, details in self.exes.items():
+            self.intervals[details['mapped_addr']:details['mapped_addr'] + details['size']] = exe
+
+        to_remove_exes = []
+        for exe, details in self.exes.items():
+            if exe in to_remove_exes:
+                continue
+
+            overlap = self.intervals.overlap(details['mapped_addr'], details['mapped_addr'] + details['size'])
+            n_ovelapping = len(overlap)
+            if n_ovelapping <= 1:
+                continue
+
+            # Remove this exe if it is an init section (probably removed)
+            if ':.init' in exe:
+                to_remove_exes.append(exe)
+                for overlapping in overlap:
+                    if overlapping.data == exe:
+                        self.intervals.remove(overlapping)
+                continue
+
+            # Remove other init sections
+            for overlapping in overlap:
+                if ':.init' in overlapping.data:
+                    assert exe not in to_remove_exes
+                    to_remove_exes.append(overlapping.data)
+                    self.intervals.remove(overlapping)
+                    n_ovelapping -= 1
+                if n_ovelapping == 1:
+                    break
+            if n_ovelapping > 1:
+                pr_msg(f"Could not resolve overlapping sections for {exe}", level='ERROR')
+                raise Exception(f"Could not resolve overlapping sections for {exe}")
+
+        for exe in to_remove_exes:
+            del self.exes[exe]
+
+    def __read_vmlinux_syms(self, obj_basenames:Dict[str, io.BufferedReader]) -> Tuple[int, List[Tuple[str, int, str, Optional[int]]]]:
+        path = obj_basenames['vmlinux'].name if 'vmlinux' in obj_basenames else None
+
+        if path is None:
+            pr_msg(f'Could not find vmlinux file', level='ERROR')
+            raise FileNotFoundError(f'Could not find vmlinux file')
+
+        with open(path, 'rb') as f:
+            if not self.check_build_id(f):
+                pr_msg(f'Build ID mismatch for vmlinux', level='WARN')
+                raise FileNotFoundError(f'Could not find vmlinux file')
+
+            base_syms = self.__read_base_syms(f)
+
+        base_addr = next(s[1] for s in base_syms if s[0] == '_stext')
+        end_addr = next(s[1] for s in base_syms if s[0] == '_end')
+        sz = end_addr - base_addr
+
+        rebased_syms = self.__relative_symbol_tuples(base_syms, base_addr, sz)
+        return base_addr, rebased_syms
+
+    def decompress_file(input_file, output_file):
+        dctx = zstd.ZstdDecompressor()
+        with open(input_file, 'rb') as ifh, open(output_file, 'wb') as ofh:
+            dctx.copy_stream(ifh, ofh)
+
+    def __find_modules(self):
         pathes = [f'/usr/lib/debug/lib/modules/{os.uname().release}']
+        tmp_path = '/tmp/modules'
+        if not os.path.exists(tmp_path):
+            os.mkdir(tmp_path)
 
         for path in pathes:
             if not os.path.exists(path) or not os.path.isdir(path):
@@ -163,7 +310,8 @@ class Kallsyms:
 
             for root, dirs, files in os.walk(path):
                 for file in files:
-                    if not file.endswith('.ko.debug') and not file.endswith('.ko'):
+                    zst = file.endswith('.ko.zst')
+                    if not file.endswith('.ko.debug') and not file.endswith('.ko') and not zst:
                         continue
 
                     # In kallsyms modules show with underscores instead of dashes
@@ -171,14 +319,22 @@ class Kallsyms:
                     basename_underscored = basename.replace('-', '_')
 
                     for obj_name in [basename, basename_underscored]:
-                        if obj_name in parsed_modules:
-                            parsed_modules[obj_name]['path'] = os.path.join(root, file)
-            break
+                        if obj_name not in self.parsed_modules:
+                            continue
+                        if zst:
+                            # check if the file is already decompressed
+                            obj_path = os.path.join(tmp_path, obj_name + '.ko')
+                            if not os.path.exists(obj_path):
+                                Kallsyms.decompress_file(os.path.join(root, file), obj_path)
+                        else:
+                            obj_path = os.path.join(root, file)
 
-    def __relative_symbol_tuples(self, syms:List[Tuple[str, int, str, Optional[int]]], min_addr:int, sz:int) -> List[Tuple[str, int, str, Optional[int]]]:
-            max_addr = min_addr + sz
+                        self.parsed_modules[obj_name]['path'] = obj_path
 
-            return [(s[0], s[1] - min_addr, s[2], s[3]) for s in syms if s[1] >= min_addr and s[1] < max_addr]
+    def __relative_symbol_tuples(self, syms:List[Tuple[str, int, str, Optional[int]]], base_addr:int, sz:int) -> List[Tuple[str, int, str, Optional[int]]]:
+            max_addr = base_addr + sz
+
+            return [(s[0], s[1] - base_addr, s[2], s[3]) for s in syms if s[1] >= base_addr and s[1] < max_addr]
 
     def __get_min_addr(self, syms:List[Tuple[str, int, str, Optional[int]]]) -> int:
         return min([s[1] for s in syms if s[2] in {'t', 'T', 'r', 'R'}])
@@ -207,6 +363,8 @@ class Kallsyms:
             # Builtin sections can overlap each other, which angr doesn't like. So
             # we are not going to merge them. And instead we are creating each one a
             # unique name with a different suffix.
+            if module_name.startswith('__builtin_ftrace'):
+                pass
             if module_name.startswith('__builtin') or module_name in {'bpf'}:
                 suffix = builtin_index[module_name]
                 builtin_index[module_name] += 1
@@ -231,6 +389,24 @@ class Kallsyms:
         syms[prev[3]].append((prev[0], prev[1], prev[2], remaining_in_page))
         return syms # type: ignore
     
+    def __kernel_sections(self, remapped_syms) -> List[Tuple[int, int]]:
+        vmlinux = remapped_syms['vmlinux']
+        include_ranges_syms = [
+            ('__start_rodata', '__end_rodata'),
+            ('_stext', '_etext'),
+        ]
+        sections = []
+        for start, end in include_ranges_syms:
+            start_addr = next(s[1] for s in vmlinux if s[0] == start)
+            end_addr = next(s[1] for s in vmlinux if s[0] == end)
+            sections.append((start_addr, end_addr))
+
+        # TODO: Move to arch
+        start_addr = next(s[1] for s in vmlinux if s[0] == 'idt_table')
+        end_addr =  start_addr + 4096
+        sections.append((start_addr, end_addr))
+        return sections
+
     def __analyze_sections(self, syms:Dict[str, List[Tuple[str, int, str, Optional[int]]]]) -> Dict[str, List[Tuple[int, int]]]:
         segments_dict = dict()
         vmlinux = syms['vmlinux']
@@ -249,8 +425,8 @@ class Kallsyms:
                     cur_section_end = sa[1] + sa[3]
                 elif sa[2] not in self.keep_sym_types and cur_section_start is not None:
                     cur_section_end = sa[1]
-                    if cur_section_start != cur_section_end:
-                        sections.append((cur_section_start, sa[1]))
+                    if cur_section_start < cur_section_end:
+                        sections.append((cur_section_start, cur_section_end))
                     cur_section_start = None
 
             if cur_section_start is not None:
@@ -384,7 +560,7 @@ class Kallsyms:
         return True
 
 
-    def __read_sizes(self, file:io.BufferedReader) -> List[Tuple[str, int, str, Optional[int]]]:
+    def __read_base_syms(self, file:io.BufferedReader) -> List[Tuple[str, int, str, Optional[int]]]:
         filename = pathlib.Path(file.name)
         logging.info(f"reading symbol sizes: {filename}")
 
@@ -409,6 +585,39 @@ class Kallsyms:
 
         return syms
 
+    def read_exe_sections(self, file_path:str) -> Dict[str, Dict[str, Any]]:
+        binary = lief.parse(file_path)
+        sections_info = []
+
+        for section in binary.sections:
+            section_info = {
+                'name': section.name,
+                'base_address': section.virtual_address,
+                'size': section.size
+            }
+            sections_info.append(section_info)
+
+        return sections_info
+
+    @staticmethod
+    def read_live_module_sections(module:str) -> Dict[str, Dict[str, int]]:
+        module_sections = {}
+
+        module_path = os.path.join('/sys/module', module, 'sections')
+        if not os.path.isdir(module_path):
+            return module_sections
+
+        for section_file in os.listdir(module_path):
+            section_file_path = os.path.join(module_path, section_file)
+            try:
+                with open(section_file_path, 'r') as f:
+                    value = int(f.read().strip(), 16)  # Assuming the values are in hexadecimal
+                    module_sections[section_file] = value
+            except (OSError, ValueError) as e:
+                print(f"Error reading {section_file_path}: {e}")
+
+        return module_sections
+
     def parse_proc_modules(self) -> Dict[str, Dict[str, Any]]:
         modules = dict()
 
@@ -417,16 +626,16 @@ class Kallsyms:
                 parts = line.strip().split()
                 module_name = parts[0]
                 module_size = int(parts[1])
-                module_ref_count = None if parts[2] == '-' else int(parts[2])
-                module_dependencies = [dep for dep in parts[4].split(',') if dep != '-']
-                module_state = parts[4]
+#                module_ref_count = None if parts[2] == '-' else int(parts[2])
+#                module_dependencies = [dep for dep in parts[4].split(',') if dep != '-']
+#                module_state = parts[4]
                 module_address = int(parts[5], 16)
 
                 module_info = {
                     'size': module_size,
-                    'ref_count': module_ref_count,
-                    'dependencies': module_dependencies,
-                    'state': module_state,
+                    #'ref_count': module_ref_count,
+                    #'dependencies': module_dependencies,
+                    #'state': module_state,
                     'address': module_address
                 }
                 modules[module_name] = module_info
@@ -437,9 +646,15 @@ class Kallsyms:
         syms = self.exes[name]['symbols']
         assert isinstance(syms, list)
 
-        syms = [cle.Symbol(owner = backend, name = s[0],
-                relative_addr = s[1],
-                sym_type = self.type_map[s[2]],
-                size = s[3]) for s in syms]
+        if name == 'vmlinux' or name.startswith('__builtin') or name.startswith('bpf:'):
+            syms = [cle.Symbol(owner = backend, name = s[0],
+                    relative_addr = s[1],
+                    sym_type = self.type_map[s[2]],
+                    size = s[3]) for s in syms]
+        else:
+            syms = [cle.Symbol(owner = backend, name = s[0],
+                    relative_addr = s[1],
+                    sym_type = s[2],
+                    size = s[3]) for s in syms]
 
         return syms

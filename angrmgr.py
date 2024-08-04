@@ -145,10 +145,7 @@ class Angr:
                 assert isinstance(code, bytes)
                 memfd_offsets[seg['addr']] = offset
                 f.write(code)
-                #os.write(memfd, code)
                 offset += len(code)
-            #os.lseek(memfd, 0, os.SEEK_SET)
-            #f = os.fdopen(memfd, "rb")
         else:
             assert kcore is not None
             f = open(kcore.path, "rb")
@@ -169,11 +166,14 @@ class Angr:
 
                 segments = [(kcore.get_offset(s[0]), s[0], s[1] - s[0]) for s in exe['segments']]
 
+            # filter out segments with negative size (3rd)
+            segments = [s for s in segments if s[2] > 0]
+
             cle = angr.cle.Blob(exe['path'] or exe_name, f, segments=segments, arch=arch.arch_name,
                                 base_addr = exe['base_addr'],
                                 custom_base_addr = exe['mapped_addr'],
                                 force_rebase = True)
-                
+
             # XXX: Angr's Blob._load() calls self.memory.add_backer() while
             # calculating the relative address as (mem_addr - self.linked_base).
             # That assumes that the base is the same as the remapped base, which is
@@ -273,6 +273,7 @@ class Angr:
         if sym.size is None or sym.size == 0:
             return
         if not self.disasm_sym(sym):
+            self.disasm_sym(sym)
             raise Exception(f"Failed to disasm {sym.name}")
         insns = self.disasm_sym_cache[sym]
 
@@ -662,17 +663,13 @@ class Angr:
         if sym not in self.code_hooks_done:
             def hook(sym: Symbol, insn:capstone.CsInsn, **kwargs):
                 a = kwargs['angr']
-                if not arch.is_fixed_rep_insn(insn):
-                    return
-                #a.proj.hook(insn.address, angr.exploration_techniques.tracer.RepHook(insn.mnemonic.split(" ")[1]).run,
-                #                    length=insn.size)
-                a.proj.hook(insn.address, RepHook(insn.mnemonic).run, length=insn.size)
-                a.hooked_rep_string_addr.add(insn.address)
+                if arch.is_fixed_rep_insn(insn):
+                    a.proj.hook(insn.address, RepHook(insn.mnemonic).run, length=insn.size)
+                    a.hooked_rep_string_addr.add(insn.address)
 
             self.for_each_insn_in_sym(sym, hook, angr=self)
             self.code_hooks_done.add(sym)
 
-        # TODO: cleaner
         self.remove_unsupported_pyvex_insn_one_sym(sym)
 
     def hook_sym(self,

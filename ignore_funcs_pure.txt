@@ -132,3 +132,6 @@ ext4_fc_stop_update
 rcu_read_unlock_strict
 __wait_for_common
 percpu_down_write
+# Tracking problem
+kmalloc_trace
+ftrace_trampoline

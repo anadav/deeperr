@@ -28,7 +28,6 @@ class KprobesReporter(Reporter):
         pending_rep_insn, pending_rep_iterations = None, None
         unemulated_call_entry = None
 
-        #sim_syms = [s for s in sim_syms if s.name != '__check_object_size']
         pbar = Pbar("processing ftrace", items=trace, unit="lines")
         for l in pbar:
             if filter_pid != l['pid']:
