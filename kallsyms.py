@@ -74,6 +74,7 @@ lief_to_angr_type_map:Dict[Any, angr.cle.backends.SymbolType] = {
     lief.ELF.Symbol.TYPE.COMMON: angr.cle.backends.SymbolType.TYPE_OTHER,
     lief.ELF.Symbol.TYPE.TLS: angr.cle.backends.SymbolType.TYPE_TLS_OBJECT,
     lief.ELF.Symbol.TYPE.GNU_IFUNC: angr.cle.backends.SymbolType.TYPE_OTHER,
+    lief.ELF.Symbol.TYPE.NOTYPE: angr.cle.backends.SymbolType.TYPE_NONE,
 }
 
 class Kallsyms:
@@ -117,18 +118,20 @@ class Kallsyms:
 
         self.__read_module_syms(obj_basenames)
 
-        vmlinux_base, vmlinux_rebased_syms = self.__read_vmlinux_syms(obj_basenames)
+       # vmlinux_base, vmlinux_rebased_syms =
+        self.__read_vmlinux_syms(obj_basenames)
 
-        remapped_linux_addr = next(s[1] for s in self.remapped_syms['vmlinux'] if s[0] == '_stext')
-        end_addr = next(s[1] for s in self.remapped_syms['vmlinux'] if s[0] == '_end')
-        self.exes['vmlinux'] = {
-            'mapped_addr': remapped_linux_addr,
-            'base_addr': arch.default_text_base,
-            'size': end_addr - remapped_linux_addr,
-            'symbols': vmlinux_rebased_syms,
-            'path': obj_basenames['vmlinux'].name,
-            'segments': self.__kernel_sections(self.remapped_syms),
-        }
+        if False:
+            remapped_linux_addr = next(s[1] for s in self.remapped_syms['vmlinux'] if s[0] == '_stext')
+            end_addr = next(s[1] for s in self.remapped_syms['vmlinux'] if s[0] == '_end')
+            self.exes['vmlinux'] = {
+                'mapped_addr': remapped_linux_addr,
+                'base_addr': arch.default_text_base,
+                'size': end_addr - remapped_linux_addr,
+                'symbols': vmlinux_rebased_syms,
+                'path': obj_basenames['vmlinux'].name,
+                'segments': self.__kernel_sections(self.remapped_syms),
+            }
 
         # create sorted list of (module-address, module-name)
         sorted_modules_list = sorted(self.parsed_modules.items(), key=lambda x: x[1]['address'])
@@ -163,6 +166,29 @@ class Kallsyms:
         # Take the size from base_syms_dict, everything else from remapped_syms_dict
         return [(s[0], s[1], s[2], base_syms_dict[s[0]][3]) for s in remapped_syms]
 
+    @staticmethod
+    def get_build_id(binary:lief.ELF.Binary) -> Optional[str]:
+        for note in binary.notes:
+            if note.type == lief.ELF.Note.TYPE.GNU_BUILD_ID and note.name == "GNU":
+                return note.description.hex()
+        return None
+
+    @staticmethod
+    def get_ro_sections(binary:lief.ELF.Binary) -> Dict[str, Dict[str, any]]:
+        sections = dict()
+        for section in binary.sections:
+            if section.name.startswith('.note'):
+                continue
+            if ((section.has(lief.ELF.Section.FLAGS.ALLOC) and not section.has(lief.ELF.Section.FLAGS.WRITE))
+                or section.name.startswith('.rodata')):
+                sections[section.name] = {
+                    'address': section.virtual_address,
+                    'size': section.size,
+                    'symbols': []
+                }
+
+        return sections
+
     def __read_module_syms(self, obj_basenames:Dict[str, io.BufferedReader]) -> Dict[str, List[Tuple[str, int, str, Optional[int]]]]:
         obj_names = self.remapped_syms.keys()
         parsed_module_names = self.parsed_modules.keys()
@@ -178,37 +204,18 @@ class Kallsyms:
             binary = lief.parse(path)
 
             # Check build-id
-            for note in binary.notes:
-                if note.type == 3 and note.name == "GNU":
-                    build_id = note.description.hex()
+            build_id = Kallsyms.get_build_id(binary)
             live_build_id = Kallsyms.get_module_build_id(obj_name)
             if live_build_id != build_id:
                 raise Exception(f"Build ID mismatch for {obj_name}")
 
-            sections = {}
-            for section in binary.sections:
-                if not section.has(lief.ELF.Section.FLAGS.ALLOC) or section.has(lief.ELF.Section.FLAGS.WRITE):
-                    continue
-
-                if section.name.startswith('.note'):
-                    continue
-
-                sections[section.name] = {
-                    'address': section.virtual_address,
-                    'size': section.size,
-                    'symbols': []
-                }
+            sections = Kallsyms.get_ro_sections(binary)
 
             # Populate the dictionary with symbols
-            for symbol in binary.symbols:
-                if symbol.name != '' and symbol.size != 0 and symbol.section is not None and symbol.section.name in sections:
-                    symbol_info = (
-                        symbol.name,
-                        symbol.value,
-                        lief_to_angr_type_map[symbol.type],
-                        symbol.size
-                    )
-                    sections[symbol.section.name]['symbols'].append(symbol_info)
+            for s in binary.symbols:
+                if s.name != '' and s.size != 0 and s.section is not None and s.section.name in sections:
+                    symbol_info = (s.name, s.value, lief_to_angr_type_map[s.type], s.size)
+                    sections[s.section.name]['symbols'].append(symbol_info)
 
             live_sections = Kallsyms.read_live_module_sections(obj_name)
 
@@ -271,28 +278,63 @@ class Kallsyms:
     def __read_vmlinux_syms(self, obj_basenames:Dict[str, io.BufferedReader]) -> Tuple[int, List[Tuple[str, int, str, Optional[int]]]]:
         path = obj_basenames['vmlinux'].name if 'vmlinux' in obj_basenames else None
 
+        remapped_base = None
+        with open('/proc/kcore', 'rb') as f:
+            elffile = ELFFile(f)
+            for segment in elffile.iter_segments():
+                if segment['p_type'] == 'PT_LOAD':
+                    remapped_base = segment['p_vaddr']
+                    load_size = segment['p_memsz']
+                    break
+
+        if remapped_base is None:
+            pr_msg(f"Could not find remapped base address for vmlinux", level='ERROR')
+            raise Exception(f"Could not find remapped base address for vmlinux")
+
         if path is None:
             pr_msg(f'Could not find vmlinux file', level='ERROR')
             raise FileNotFoundError(f'Could not find vmlinux file')
 
         binary = lief.parse(path)
-        for note in binary.notes:
-            if note.type == lief.ELF.Note.TYPE.GNU_BUILD_ID and note.name == "GNU":
-                build_id = note.description.hex()
-
+        build_id = Kallsyms.get_build_id(binary)
         live_build_id = Kallsyms.get_build_id_from_kernel_notes(pathlib.Path("/sys/kernel/notes"))
         if live_build_id != build_id:
             raise Exception(f"Build ID mismatch for vmlinux")
 
-        with open(path, 'rb') as f:
-            base_syms = self.__read_base_syms(f)
+        sections = {section.name:section for section in binary.sections}
+        sections_to_alloc = [section for section in binary.sections
+                               if section.has(lief.ELF.Section.FLAGS.ALLOC)
+                               and 'percpu' not in section.name
+                               and '.note' not in section.name]
+        sections_to_load = [section.name for section in sections_to_alloc
+                            if not section.has(lief.ELF.Section.FLAGS.WRITE)]
+        section_names_to_alloc = {section.name for section in sections_to_alloc}
 
-        base_addr = next(s[1] for s in base_syms if s[0] == '_stext')
-        end_addr = next(s[1] for s in base_syms if s[0] == '_end')
-        sz = end_addr - base_addr
+        base_addr = min([section.virtual_address for section in sections_to_alloc])
 
-        rebased_syms = self.__relative_symbol_tuples(base_syms, base_addr, sz)
-        return base_addr, rebased_syms
+        symbols = [s for s in binary.symbols if (s.is_function or s.is_variable) and s.section is not None]
+        symbols = [s for s in symbols if s.section.name in section_names_to_alloc]
+
+        rebased_symbols = [(s.name, s.value - base_addr, lief_to_angr_type_map[s.type], s.size) for s in symbols]
+
+        segments_to_load = [(sections[s].virtual_address - base_addr + remapped_base,
+                             sections[s].virtual_address + sections[s].size - base_addr + remapped_base) for s in sections_to_load]
+
+        try:
+            idt_table_sym = [s for s in rebased_symbols if s[0] == 'idt_table'][0]
+        except:
+            pr_msg(f"Could not find idt_table symbol in vmlinux", level='WARN')
+
+        segments_to_load.append((idt_table_sym[1] + remapped_base, idt_table_sym[1] + idt_table_sym[3] + remapped_base))
+
+        self.exes['vmlinux'] = {
+            'mapped_addr': remapped_base,
+            'base_addr': base_addr,
+            'size': load_size,
+            'symbols': symbols,
+            'path': obj_basenames['vmlinux'].name,
+            'segments': segments_to_load,
+        }
 
     def decompress_file(input_file, output_file):
         dctx = zstd.ZstdDecompressor()
@@ -522,31 +564,6 @@ class Kallsyms:
     def get_build_id_from_kernel_notes(kernel_notes_file:pathlib.Path):
         data = kernel_notes_file.read_bytes()
         return Kallsyms.extract_build_id(data)
-
-    def __read_base_syms(self, file:io.BufferedReader) -> List[Tuple[str, int, str, Optional[int]]]:
-        filename = pathlib.Path(file.name)
-        logging.info(f"reading symbol sizes: {filename}")
-
-        # Reading the ELF using elftools is incredibly slow. Use nm instead.
-        args = ['nm', '-n', '--print-size', str(filename)]
-        logging.debug("running: {0}".format(' '.join(args)))
-        try:
-            output = subprocess.check_output(
-                args, stderr=subprocess.STDOUT, timeout=20,
-                universal_newlines=True)
-        except subprocess.CalledProcessError as e:
-            pr_msg(f"failed reading symbol file: {e}", level="ERROR")
-            raise e
-
-        lns = [[l[:16]] + l[17:].split() for l in output.splitlines()]
-
-        syms = [(l[3 if len(l) == 4 else 2],                # name
-            int(l[0], 16),                                  # addr
-            l[2 if len(l) == 4 else 1],                     # type
-            (int(l[1], 16)) if len(l) == 4 else None)       # size
-            for l in lns if len(l) <= 4 and l[0] != ' ' * 16]
-
-        return syms
 
     def read_exe_sections(self, file_path:str) -> Dict[str, Dict[str, Any]]:
         binary = lief.parse(file_path)
