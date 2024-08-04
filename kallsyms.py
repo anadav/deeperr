@@ -23,8 +23,6 @@ import cle.backends
 import angr
 from arch import arch
 
-NT_GNU_BUILD_ID = 3
-
 def get_vmlinux(user_option:Optional[List[BinaryIO]]) -> List[BinaryIO]:
     if user_option is None:
         user_option = []
@@ -121,8 +119,6 @@ class Kallsyms:
 
         vmlinux_base, vmlinux_rebased_syms = self.__read_vmlinux_syms(obj_basenames)
 
-        #all_segments = self.__prevent_section_overlap(all_segments)
-
         remapped_linux_addr = next(s[1] for s in self.remapped_syms['vmlinux'] if s[0] == '_stext')
         end_addr = next(s[1] for s in self.remapped_syms['vmlinux'] if s[0] == '_end')
         self.exes['vmlinux'] = {
@@ -157,6 +153,7 @@ class Kallsyms:
                 'segments': [(min_addr, max_addr)],
             }
 
+        # Save memory and help pickle
         del self.intervals
 
     def __fix_sym_sizes(self, remapped_syms:List[Tuple[str, int, str, Optional[int]]], base_syms:List[Tuple[str, int, str, Optional[int]]]):
@@ -165,7 +162,6 @@ class Kallsyms:
 
         # Take the size from base_syms_dict, everything else from remapped_syms_dict
         return [(s[0], s[1], s[2], base_syms_dict[s[0]][3]) for s in remapped_syms]
-
 
     def __read_module_syms(self, obj_basenames:Dict[str, io.BufferedReader]) -> Dict[str, List[Tuple[str, int, str, Optional[int]]]]:
         obj_names = self.remapped_syms.keys()
@@ -279,11 +275,16 @@ class Kallsyms:
             pr_msg(f'Could not find vmlinux file', level='ERROR')
             raise FileNotFoundError(f'Could not find vmlinux file')
 
-        with open(path, 'rb') as f:
-            if not self.check_build_id(f):
-                pr_msg(f'Build ID mismatch for vmlinux', level='WARN')
-                raise FileNotFoundError(f'Could not find vmlinux file')
+        binary = lief.parse(path)
+        for note in binary.notes:
+            if note.type == lief.ELF.Note.TYPE.GNU_BUILD_ID and note.name == "GNU":
+                build_id = note.description.hex()
 
+        live_build_id = Kallsyms.get_build_id_from_kernel_notes(pathlib.Path("/sys/kernel/notes"))
+        if live_build_id != build_id:
+            raise Exception(f"Build ID mismatch for vmlinux")
+
+        with open(path, 'rb') as f:
             base_syms = self.__read_base_syms(f)
 
         base_addr = next(s[1] for s in base_syms if s[0] == '_stext')
@@ -490,12 +491,13 @@ class Kallsyms:
 
             name_start = offset
             name_end = name_start + namesz
+            name = data[offset:offset + namesz].rstrip(b'\x00')
 
             desc_start = (name_end + 3) & ~3
             desc_end = desc_start + descsz
 
             # Get it from the last note if there are multiple ones
-            if note_type == NT_GNU_BUILD_ID:
+            if note_type == lief.ELF.Note.TYPE.GNU_BUILD_ID and name == b"GNU":
                 build_id = data[desc_start:desc_end]
 
             offset = (desc_end + 3) & ~3
@@ -517,48 +519,9 @@ class Kallsyms:
         return Kallsyms.extract_build_id(data)
 
     @staticmethod
-    def get_build_id_from_vmlinux(vmlinux_file:io.BufferedReader) -> Optional[str]:
-        r = None
-        #with open(vmlinux_file, 'rb') as f:
-        elf = ELFFile(vmlinux_file)
-        for section in elf.iter_sections():
-            if isinstance(section, NoteSection):
-                for note in section.iter_notes():
-                    if note.n_type == 'NT_GNU_BUILD_ID':
-                        r = note.n_desc
-        return r
-
-    @staticmethod
     def get_build_id_from_kernel_notes(kernel_notes_file:pathlib.Path):
         data = kernel_notes_file.read_bytes()
         return Kallsyms.extract_build_id(data)
-
-    @staticmethod
-    def check_build_id(obj_file:io.BufferedReader) -> bool:
-        file_build_id = Kallsyms.get_build_id_from_vmlinux(obj_file)
-
-        path = pathlib.Path(obj_file.name)
-        basename = Kallsyms.__get_basename(path.name)
-
-        if basename == 'vmlinux':
-            live_build_id = Kallsyms.get_build_id_from_kernel_notes(pathlib.Path("/sys/kernel/notes"))
-        else:
-            live_build_id = Kallsyms.get_module_build_id(basename)
-        
-        if file_build_id is None:
-            logging.info(f"no build ID found in {obj_file}")
-            return False
-        
-        if live_build_id is None:
-            logging.info(f"no build ID found in kernel")
-            return False
-        
-        if file_build_id != live_build_id:
-            logging.info(f"build ID mismatch: {file_build_id} != {live_build_id}")
-            return False
-        
-        return True
-
 
     def __read_base_syms(self, file:io.BufferedReader) -> List[Tuple[str, int, str, Optional[int]]]:
         filename = pathlib.Path(file.name)
