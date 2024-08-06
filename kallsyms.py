@@ -312,7 +312,7 @@ class Kallsyms:
 
         base_addr = min([section.virtual_address for section in sections_to_alloc])
 
-        symbols = [s for s in binary.symbols if (s.is_function or s.is_variable) and s.section is not None]
+        symbols = [s for s in binary.symbols if s.section is not None]
         symbols = [s for s in symbols if s.section.name in section_names_to_alloc]
 
         rebased_symbols = [(s.name, s.value - base_addr, lief_to_angr_type_map[s.type], s.size) for s in symbols]
@@ -331,7 +331,7 @@ class Kallsyms:
             'mapped_addr': remapped_base,
             'base_addr': base_addr,
             'size': load_size,
-            'symbols': symbols,
+            'symbols': rebased_symbols,
             'path': obj_basenames['vmlinux'].name,
             'segments': segments_to_load,
         }
@@ -565,20 +565,6 @@ class Kallsyms:
         data = kernel_notes_file.read_bytes()
         return Kallsyms.extract_build_id(data)
 
-    def read_exe_sections(self, file_path:str) -> Dict[str, Dict[str, Any]]:
-        binary = lief.parse(file_path)
-        sections_info = []
-
-        for section in binary.sections:
-            section_info = {
-                'name': section.name,
-                'base_address': section.virtual_address,
-                'size': section.size
-            }
-            sections_info.append(section_info)
-
-        return sections_info
-
     @staticmethod
     def read_live_module_sections(module:str) -> Dict[str, Dict[str, int]]:
         module_sections = {}
@@ -606,16 +592,10 @@ class Kallsyms:
                 parts = line.strip().split()
                 module_name = parts[0]
                 module_size = int(parts[1])
-#                module_ref_count = None if parts[2] == '-' else int(parts[2])
-#                module_dependencies = [dep for dep in parts[4].split(',') if dep != '-']
-#                module_state = parts[4]
                 module_address = int(parts[5], 16)
 
                 module_info = {
                     'size': module_size,
-                    #'ref_count': module_ref_count,
-                    #'dependencies': module_dependencies,
-                    #'state': module_state,
                     'address': module_address
                 }
                 modules[module_name] = module_info
@@ -626,7 +606,7 @@ class Kallsyms:
         syms = self.exes[name]['symbols']
         assert isinstance(syms, list)
 
-        if name == 'vmlinux' or name.startswith('__builtin') or name.startswith('bpf:'):
+        if name.startswith('__builtin') or name.startswith('bpf:'):
             syms = [cle.Symbol(owner = backend, name = s[0],
                     relative_addr = s[1],
                     sym_type = self.type_map[s[2]],

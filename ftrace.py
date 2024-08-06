@@ -42,16 +42,20 @@ class Ftrace:
                                 r'\((?P<to_func>[^\+\s\)]+)' +
                                 r'\+0x(?P<offset>[0-9a-f]+)' +
                                 r'\/0x(?P<size>[0-9a-f]+\s+)' +
+                                r'(?:\s*\[(?P<to_module>[^\]]+)\]\s+)?'
                                 r'\<(?P<to_ip>[0-9a-f]+)\>\s+' +
                                 r'\<\- ' +
                                 r'(?P<from_func>[^\)]+)\s+' +
+                                r'(?:\s*\[(?P<from_module>[^\]]+)\]\s+)?'
                                 r'\<(?P<from_ip>[0-9a-f]+)\>\)\s+' +
                                 r'(?P<vals>.*)$')
 
     ftrace_func_regex = re.compile(r'(?P<to_func>\S+)\s+' +
+                                    r'(?:\s*\[(?P<to_module>[^\]]+)\]\s+)?'
                                     r'\<(?P<to_ip>[0-9a-f]+)\>\s+' +
                                     r'\<\-' +
                                     r'(?P<from_func>\S+)\s+' +
+                                    r'(?:\s*\[(?P<from_module>[^\]]+)\]\s+)?'
                                     r'\<(?P<from_ip>[0-9a-f]+)\>' +
                                     r'$')
 
@@ -68,6 +72,7 @@ class Ftrace:
     ftrace_probe_regex = re.compile(r'p_0x[0-9a-f]+\:\s*' +
                                 r'\((?P<sym>[^\+\s\)]+)' +
                                 r'\+0x(?P<offset>[0-9a-f]+)' +
+                                r'(?:\s*\[(?P<module>[^\]]+)\]\s+)?'
                                 r'\/0x(?P<size>[0-9a-f]+)\s+' + 
                                 r'\<(?P<addr>[0-9a-f]+)\>' +
                                 r'\) ' +
@@ -77,6 +82,8 @@ class Ftrace:
                             r'pid=(?P<pid>\d+) ' + 
                             r'child_comm=(?P<child_comm>.+) ' +
                             r'child_pid=(?P<child_pid>\d+)')
+
+    function_module_regex = re.compile(r'(\w+)\s*(?:\[(\w+)\])?')
 
     callstack_regex = re.compile(r' \=\> (?P<sym>\S+) \<(?P<addr>[0-9a-f]+)\>')
 
@@ -105,8 +112,6 @@ class Ftrace:
     blacklist_regex = re.compile(blacklist_pattern)
 
     __instance:Optional['Ftrace'] = None
-
-    # TODO: Add interface to get_sym() and use it instead of 
 
     @staticmethod 
     def main_instance(angr_mgr:Optional[Any] = None) -> 'Ftrace':
@@ -166,7 +171,7 @@ class Ftrace:
         self.kprobes_disabled = False
         #self.kprobes:Dict[Tuple[int, bool], 'Ftrace'.KprobeEvent] = dict()
         self.kprobes:Dict[str, 'Ftrace'.KprobeEvent] = dict()
-        self.__available_funcs = None
+        self.available_filter_functions = None
         self.kprobe_event_file = None
         self.kprobe_blacklist:Optional[List[Tuple[int,int]]] = None
         self.events = dict()
@@ -221,6 +226,7 @@ class Ftrace:
             self.kprobe_event_clear()
 
         self.__read_available_tracers()
+        self.__read_available_filter_functions()
     
     def init_kprobe_base(self, kprobe_base_sym_name:str, get_addr_fn:Callable[[str], Optional[int]]):
         self.kprobe_base_sym_name = kprobe_base_sym_name
@@ -246,14 +252,6 @@ class Ftrace:
             except Exception:
                 raise Exception("cannot create ftrace instance")
         return self.instances[instance_name]
-
-#    @property
-#    def angr_mgr(self):
-#        return self.__angr_mgr 
-
-#    @angr_mgr.setter
-#    def angr_mgr(self, angr_mgr):
-#        self.__angr_mgr = angr_mgr
 
     def __init_kprobes(self):
         if self.instance_name is not None:
@@ -295,22 +293,19 @@ class Ftrace:
         self.kprobes_cleared = True
 
 
-    def read_available_filter_functions(self):
-        # Reading the available funcs is heavy and we might not need it, so do
-        # it lazily
-        if self.__available_funcs is not None:
-            return
-        self.__available_funcs = set()
+    def __read_available_filter_functions(self):
+        self.available_filter_functions = set()
         txt = self.trace_path.joinpath("available_filter_functions").read_text()
-        self.__available_funcs = {l.strip() for l in txt.splitlines()}
+        for line in txt.splitlines():
+            match = self.function_module_regex.match(line.strip())
+            if match:
+                self.available_filter_functions.add((match.group(2), match.group(1)))
 
     def __is_available_filter_function(self, sym:Symbol) -> bool:
-        if '.' not in sym.name:
-            return sym.name in self.available_funcs
+        module = None if 'vmlinux' in sym.owner.binary_basename else sym.owner.binary_basename.split('.')[0]
 
-        base_name = sym.name.split('.')[0]
-        return (sym.name in self.available_funcs or
-                base_name in self.available_funcs)
+        return ((module, sym.name) in self.available_filter_functions or
+                (module, sym.name.split('.')[0]) in self.available_filter_functions)
 
     @staticmethod
     def is_available_filter_function(sym:Symbol) -> bool:
@@ -634,9 +629,22 @@ class Ftrace:
         resume_trace_strs = [s.split('/')[-1] for s in resume_trace_events]
 
         found_exit, found_entry = False, False
+            
+        regex_list = [
+            (self.ftrace_ret_regex, "ret"),
+            (self.ftrace_func_regex, "func"),
+            (self.ftrace_probe_regex, "probe"),
+            (self.ftrace_syscall_enter_regex, "sysenter"),
+            (self.ftrace_raw_syscall_exit_regex, "sysexit"),
+            (self.ftrace_syscall_exit_regex, "sysexit"),
+        ]
+
         for l in Pbar("parse snapshot", items=lines):
             if l.startswith('#'):
                 continue
+
+            #if 'idxd_user_drv_probe' in l:
+            #    print(l)
 
             m = self.callstack_regex.match(l)
             if m is not None:
@@ -667,15 +675,6 @@ class Ftrace:
 
             if payload == '<stack trace>':
                 continue
-
-            regex_list = [
-                (self.ftrace_ret_regex, "ret"),
-                (self.ftrace_func_regex, "func"),
-                (self.ftrace_probe_regex, "probe"),
-                (self.ftrace_syscall_enter_regex, "sysenter"),
-                (self.ftrace_raw_syscall_exit_regex, "sysexit"),
-                (self.ftrace_syscall_exit_regex, "sysexit"),
-            ]
 
             for r in regex_list:
                 m = r[0].match(payload)
@@ -791,12 +790,6 @@ class Ftrace:
     def remove_all_probes(self):
         self.kprobe_event_clear()
 
-    @property
-    def available_funcs(self) -> Set[str]:
-        self.read_available_filter_functions()
-        assert self.__available_funcs is not None
-        return self.__available_funcs
-    
     def get_event(self, name: str):
         if name not in self.events:
             self.events[name] = self.Event(name, self)

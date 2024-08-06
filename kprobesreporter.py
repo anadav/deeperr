@@ -46,15 +46,20 @@ class KprobesReporter(Reporter):
 
             # If we reached the syscall tracing at the end, stop
             if ty == 'sysexit':
+                pr_msg(f"processing sysexit: {l}", level="DEBUG")
                 break
             elif ty == 'sysenter':
+                pr_msg(f"processing sysenter: {l}", level="DEBUG")
                 continue
             elif ty == 'probe':
+                pr_msg(f"processing probe: {l}", level="DEBUG")
                 state = arch.ftrace_state_dict(l)
                 next_ip = l['addr']
             elif ty == 'ret':
+                pr_msg(f"processing return - from 0x{l['from_ip']:x}@{l['from_func']} to 0x{l['to_ip']:x}@{l['to_func']}", level="DEBUG")
                 next_ip = None
             elif ty == 'func':
+                pr_msg(f"processing function entry - from 0x{l['from_ip']:x}@{l['from_func']} to 0x{l['to_ip']:x}@{l['to_func']}", level="DEBUG")
                 try:
                     next_ip = self.angr_mgr.get_prev_insn(l['from_ip']).address
                 except ValueError:
@@ -86,10 +91,6 @@ class KprobesReporter(Reporter):
                     insn = self.angr_mgr.next_insn(insn)
                     continue
 
-#                if ((not arch.is_direct_branch_insn(insn)) or
-#                    arch.is_cond_branch_insn(insn)):
-#                    break
-
                 try:
                     target_insn = self.angr_mgr.get_branch_target_insn(insn)
                     target_sym = target_insn and self.angr_mgr.get_sym(target_insn)
@@ -117,6 +118,7 @@ class KprobesReporter(Reporter):
                 continue
 
             target_insn = None
+            go_to_next_insn = False
             
             if ty == 'probe' and match_ip and unemulated_call_entry is not None:
                 unemulated_call_entry['ret'] = l['ax']
@@ -153,7 +155,7 @@ class KprobesReporter(Reporter):
                     assert(target_insn is not None)
                     pr_msg(f"taken branch: {insn} -> {target_insn}", level="DEBUG")
                 else:
-                    insn = self.angr_mgr.next_insn(insn)
+                    go_to_next_insn = True
                     pr_msg(f"not taken branch: {insn}", level="DEBUG")
             elif arch.is_loop_insn(insn):
                 assert state is not None
@@ -161,14 +163,14 @@ class KprobesReporter(Reporter):
                 if arch.is_loop_taken(insn, state):
                     target_insn = self.angr_mgr.get_branch_target_insn(insn)
                 else:
-                    insn = self.angr_mgr.next_insn(insn)
+                    go_to_next_insn = True
             elif arch.is_rep_insn(insn):
                 assert ty == 'probe'
                 assert state is not None
                 pending_rep_iterations = arch.rep_iterations(insn, state)
                 if pending_rep_iterations > 0:
                     pending_rep_insn = insn
-                insn = self.angr_mgr.next_insn(insn)
+                go_to_next_insn = True
             elif arch.is_predicated_mov(insn):
                 # Create psuedo entry to know that the cmov was taken
                 assert state is not None
@@ -176,7 +178,11 @@ class KprobesReporter(Reporter):
                 if not arch.is_cond_jmp_taken(insn, state):
                     target_insn = self.angr_mgr.next_insn(insn)
 
-            if target_insn is not None:
+            if go_to_next_insn:
+                pr_msg(str(insn), level="DEBUG")
+                insn = self.angr_mgr.next_insn(insn)
+            elif target_insn is not None:
+                pr_msg(str(insn), level="DEBUG")
                 assert insn is not None
                 branch = {'from_ip':insn.address, 'to_ip':target_insn.address}
                 if 'callstack' in l:
