@@ -95,7 +95,8 @@ class SyscallInfo:
             for number, name in SYSCALL_NAMES.items():
                 SyscallInfo.syscall_numbers[name.lower()].append(number)
 
-        syscalls = SyscallInfo.syscall_numbers[syscall.lower()]
+        syscall_lower = syscall.lower()
+        syscalls = SyscallInfo.syscall_numbers[syscall_lower] + SyscallInfo.syscall_numbers[syscall_lower + '64']
         if len(syscalls) > 1:
             pr_msg(f'Found multiple syscalls for {syscall}: {syscalls}; using {syscalls[0]}', level='WARN')
         elif len(syscalls) == 0:
