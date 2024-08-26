@@ -9,7 +9,6 @@ import os
 import zstandard as zstd
 import lief
 from intervaltree import IntervalTree
-from enum import Enum
 from prmsg import pr_msg
 from collections import defaultdict
 from typing import BinaryIO
@@ -170,7 +169,6 @@ class Kallsyms:
     def __read_module_syms(self, obj_basenames:Dict[str, io.BufferedReader]) -> Dict[str, List[Tuple[str, int, str, Optional[int]]]]:
         obj_names = self.remapped_syms.keys()
         parsed_module_names = self.parsed_modules.keys()
-        rebased_syms = dict()
 
         for obj_name in obj_names & parsed_module_names:
             path = (obj_basenames[obj_name].name if obj_name in obj_basenames
@@ -410,24 +408,6 @@ class Kallsyms:
         syms[prev[3]].append((prev[0], prev[1], prev[2], remaining_in_page))
         return syms # type: ignore
     
-    def __kernel_sections(self, remapped_syms) -> List[Tuple[int, int]]:
-        vmlinux = remapped_syms['vmlinux']
-        include_ranges_syms = [
-            ('__start_rodata', '__end_rodata'),
-            ('_stext', '_etext'),
-        ]
-        sections = []
-        for start, end in include_ranges_syms:
-            start_addr = next(s[1] for s in vmlinux if s[0] == start)
-            end_addr = next(s[1] for s in vmlinux if s[0] == end)
-            sections.append((start_addr, end_addr))
-
-        # TODO: Move to arch
-        start_addr = next(s[1] for s in vmlinux if s[0] == 'idt_table')
-        end_addr =  start_addr + 4096
-        sections.append((start_addr, end_addr))
-        return sections
-
     @staticmethod
     def __get_basename(filename: str) -> str:
         if filename.startswith('vmlinux'):

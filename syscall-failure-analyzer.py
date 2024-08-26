@@ -30,7 +30,6 @@ from ftrace import Ftrace
 
 DEFAULT_DATA_FILENAME = 'deeperr.data'
 
-
 def get_occurrences(s:str) -> Optional[Set[int]]:
     if s is None:
         return None
@@ -203,7 +202,6 @@ def main():
 
     if args.command == 'record':
         kprobes = args.kprobes
-        kcore = Kcore()
 
         if not kprobes and not IntelPTRecorder.cpu_supports_pt():
             pr_msg("CPU does not support Intel PT", level="ERROR")
