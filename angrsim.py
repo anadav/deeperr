@@ -3,10 +3,8 @@
 from typing import Any, Dict, Tuple, List, Optional, Set, Iterable, Callable, Union
 import logging
 import time
-import copy
 import angr
 import capstone
-import claripy
 from cle.backends import Symbol
 from arch import arch
 from angrmgr import Angr
@@ -158,11 +156,9 @@ class AngrSim:
             return False
 
         # XXX: hack
-        if sym.name in {'_copy_to_user'}:
-            return False
+#        if sym.name in {'_copy_to_user'}:
+#            return False
 
-        #if self.angr_mgr.is_fastpath_to_out(s) or self.angr_mgr.is_fastpath_to_ret(s):
-        #    return False
         if self.angr_mgr.is_skipped_sym(s):
             return True
 
@@ -170,8 +166,6 @@ class AngrSim:
             return True
         
         return False
-
-        #return self.angr_mgr.is_ignored_sym(sym)
     
     @staticmethod
     def is_failure(s:angr.SimState, errcode:int, potential:bool=False) -> bool:
@@ -270,16 +264,8 @@ class AngrSim:
     def step_func(self, simgr: angr.SimulationManager):
         self.follow_trace(simgr)
 
-        #simgr = simgr.apply(state_func=self.clear_skipped_is_sync)
-
-        # TODO: If it is hooked, we need to run the hook!!!
-        #simgr = simgr.step(selector_func = self.is_skipped_code,
-        #                    procedure = Angr.step_func_proc_trace,
-        #                    num_inst = 1)
-
         self.move_to_diverged()
 
-        #simgr = simgr.move('unconstrained', 'active', lambda s:self.angr_mgr.state_ip(s) is not None)
         simgr = simgr.apply(state_func=self.update_state_max_depth, stash='active')
         simgr = simgr.apply(state_func=self.warn_potential_simulation_problem, stash='active')
         return simgr
@@ -456,8 +442,6 @@ class AngrSim:
         jump_target = Angr.state_concrete_addr(state)
         from_ip, to_ip = c.current_branch['from_ip'], c.current_branch['to_ip']
         next_ip = insn and self.angr_mgr.next_insn_addr(insn)
-
-        sym = self.angr_mgr.get_sym(state)
 
         if state.history.jumpkind == 'Ijk_Call':
             if self.is_skipped_code(state):
@@ -656,7 +640,6 @@ class AngrSim:
             self.prepare_hooks()
             self.handle_predicated_mov()
 
-            #for insn in self.simgr.active[0].block().disassembly.insns:
             timed_out = self.run_one_step(res)
             if timed_out:
                 pbar.set_description_str(f'{msg} (trimmed)')
