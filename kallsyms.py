@@ -3,9 +3,7 @@
 from typing import Any, Dict, Tuple, List, Optional, Set, Iterable, Callable
 import logging
 import pathlib
-import subprocess
 import io
-import abc
 import struct
 import os
 import zstandard as zstd
@@ -118,20 +116,7 @@ class Kallsyms:
 
         self.__read_module_syms(obj_basenames)
 
-       # vmlinux_base, vmlinux_rebased_syms =
         self.__read_vmlinux_syms(obj_basenames)
-
-        if False:
-            remapped_linux_addr = next(s[1] for s in self.remapped_syms['vmlinux'] if s[0] == '_stext')
-            end_addr = next(s[1] for s in self.remapped_syms['vmlinux'] if s[0] == '_end')
-            self.exes['vmlinux'] = {
-                'mapped_addr': remapped_linux_addr,
-                'base_addr': arch.default_text_base,
-                'size': end_addr - remapped_linux_addr,
-                'symbols': vmlinux_rebased_syms,
-                'path': obj_basenames['vmlinux'].name,
-                'segments': self.__kernel_sections(self.remapped_syms),
-            }
 
         # create sorted list of (module-address, module-name)
         sorted_modules_list = sorted(self.parsed_modules.items(), key=lambda x: x[1]['address'])
@@ -158,13 +143,6 @@ class Kallsyms:
 
         # Save memory and help pickle
         del self.intervals
-
-    def __fix_sym_sizes(self, remapped_syms:List[Tuple[str, int, str, Optional[int]]], base_syms:List[Tuple[str, int, str, Optional[int]]]):
-        # Change remapped_syms into dict
-        base_syms_dict = {s[0]:s for s in base_syms}
-
-        # Take the size from base_syms_dict, everything else from remapped_syms_dict
-        return [(s[0], s[1], s[2], base_syms_dict[s[0]][3]) for s in remapped_syms]
 
     @staticmethod
     def get_build_id(binary:lief.ELF.Binary) -> Optional[str]:
@@ -449,71 +427,6 @@ class Kallsyms:
         end_addr =  start_addr + 4096
         sections.append((start_addr, end_addr))
         return sections
-
-    def __analyze_sections(self, syms:Dict[str, List[Tuple[str, int, str, Optional[int]]]]) -> Dict[str, List[Tuple[int, int]]]:
-        segments_dict = dict()
-        vmlinux = syms['vmlinux']
-
-        for k, v in syms.items():
-            sections:List[Tuple[int, int]] = []
-            cur_section_start = None
-            cur_section_end = None
-
-            for sa in v:
-                if sa[3] is None:
-                    continue
-                if sa[2] in self.keep_sym_types:
-                    if cur_section_start is None:
-                        cur_section_start = sa[1]
-                    cur_section_end = sa[1] + sa[3]
-                elif sa[2] not in self.keep_sym_types and cur_section_start is not None:
-                    cur_section_end = sa[1]
-                    if cur_section_start < cur_section_end:
-                        sections.append((cur_section_start, cur_section_end))
-                    cur_section_start = None
-
-            if cur_section_start is not None:
-                assert cur_section_end is not None
-                sections.append((cur_section_start, cur_section_end))
-
-            segments_dict[k] = sections
-
-        include_ranges_syms = [
-            ('__start_rodata', '__end_rodata'),
-            ('_stext', '_etext'),
-        ]
-        # find the symbols from include_ranges_syms in vmlinux
-        include_ranges = []
-        for start, end in include_ranges_syms:
-            start_addr = next(s[1] for s in vmlinux if s[0] == start)
-            end_addr = next(s[1] for s in vmlinux if s[0] == end)
-            include_ranges.append((start_addr, end_addr))
-
-        # TODO: Move to arch
-        start_addr = next(s[1] for s in vmlinux if s[0] == 'idt_table')
-        end_addr =  start_addr + 4096
-        include_ranges.append((start_addr, end_addr))
-
-        combined_ranges = segments_dict['vmlinux'] + include_ranges
-        combined_ranges.sort(key=lambda x: x[0])
-
-        # Initialize the merged ranges list with the first range
-        merged_ranges = [combined_ranges[0]]
-
-        for current_start, current_end in combined_ranges[1:]:
-            last_range_start, last_range_end = merged_ranges[-1]
-
-            # Check if the current range overlaps or is adjacent to the last range in the merged list
-            if current_start <= last_range_end + 1:
-                # Update the end value of the last range to the maximum of the current and last end values
-                merged_ranges[-1] = (last_range_start, max(current_end, last_range_end))
-            else:
-                # If the current range doesn't overlap or is not adjacent, append it to the merged list
-                merged_ranges.append((current_start, current_end))
-
-        segments_dict['vmlinux'] = merged_ranges
-
-        return segments_dict
 
     @staticmethod
     def __get_basename(filename: str) -> str:
