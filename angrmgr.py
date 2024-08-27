@@ -181,6 +181,8 @@ class Angr:
             backers = [b for b in cle.memory.backers()]
             for b in backers:
                 cle.memory.remove_backer(b[0])
+
+            for b in backers:
                 cle.memory.add_backer(b[0] + exe['base_addr'] - exe['mapped_addr'], b[1])
                 
             angr_syms = kallsyms.get_symbols(cle, exe_name)
