@@ -15,7 +15,7 @@ from angrmgr import Angr
 from angrsim import AngrSim
 from arch import arch
 from cle.backends import Symbol
-from prmsg import pr_msg, uptime
+from prmsg import pr_msg, uptime, is_terminal_output
 from addr2line import Addr2Line
 
 class Reporter(metaclass=abc.ABCMeta):
@@ -479,7 +479,9 @@ class Reporter(metaclass=abc.ABCMeta):
         end_line = start_line + 40
         code = lines[start_line:end_line]
         line_offset = line - start_line - 1
-        if col == 0:
+        if not is_terminal_output():
+            code[line_offset] = f'{code[line_offset]}     <<< @{col}'
+        elif col == 0:
             code[line_offset] = colors.color(f'{code[line_offset]}     <<<' , fg='red')
         else:
             before_token, failure_token, after_token = self.get_tokens_around_column(code[line_offset], col - 1)

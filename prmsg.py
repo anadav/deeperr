@@ -28,6 +28,9 @@ output_file:TextIO = sys.stdout
 quiet:bool = False
 debug:bool = False
 
+def is_terminal_output() -> bool:
+    return output_file in {sys.stdout, sys.stderr}
+
 def change_output(f_name:str):
     global output_file
 
