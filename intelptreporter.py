@@ -457,6 +457,9 @@ class IntelPTReporter(Reporter):
                 continue
             if entries[i][1]['from_sym'] not in arch.syscall_entry_points:
                 continue
+            to_sym = self.angr_mgr.get_sym(entries[i][1]['to_ip'])
+            if self.angr_mgr.is_ignored_sym(to_sym):
+                continue
             break
         
         enter_entry_idx = i
