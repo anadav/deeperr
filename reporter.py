@@ -35,7 +35,6 @@ class Reporter(metaclass=abc.ABCMeta):
         self.errcode_filter = errcode_filter
         self.occurances_filter = occurances_filter
         self.failures = failures
-        self.kallsyms = None
         self.angr_mgr = angr_mgr
         self.print_stats = print_stats
         self.traces = traces
