@@ -131,7 +131,6 @@ class Reporter(metaclass=abc.ABCMeta):
     def report_one(self,
                    branches: List[Dict[str, Union[int, Dict[str, int], None, List[int]]]],
                    errcode: int,
-                   sim_syms: Optional[Set[Symbol]] = None,
                    simulate_all: bool = False,
     ):
         if self.errcode_filter and errcode != self.errcode_filter:
@@ -141,10 +140,6 @@ class Reporter(metaclass=abc.ABCMeta):
             order = [(0, len(branches))]
         else:
             order = self.get_analysis_order(branches, errcode)
-
-        # TODO: get rid off. Instead, get_sym() or something should make this cleanup
-        if sim_syms is not None:
-            self.angr_mgr.remove_unsupported_pyvex_insn(sim_syms)
 
         avoid_repeated_syms = True
         tried_syms = set()

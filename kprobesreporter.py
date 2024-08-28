@@ -16,8 +16,7 @@ class KprobesReporter(Reporter):
                                              filter_pid = failure['pid'],
                                              sim_syms = sim_syms)
             super().report_one(branches = branches,
-                               errcode = failure['errcode'],
-                               sim_syms = sim_syms)
+                               errcode = failure['errcode'])
 
     # Converting ftrace to branches format that is common to processor trace
     # and ftrace.
