@@ -79,7 +79,7 @@ def report(inputs: str,
             pr_msg(f'error reading result file {f_name}: file is corrupted', level='ERROR')
             continue
         
-        kallsyms = data.get('kallsyms', Kallsyms(objs))
+        kallsyms = data['kallsyms'] if 'kallsyms' in data else Kallsyms(objs)
         saved_segs = data.get('kcore')
         kcore = Kcore() if saved_segs is None else None
 
