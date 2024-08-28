@@ -131,6 +131,7 @@ class Reporter(metaclass=abc.ABCMeta):
     def report_one(self,
                    branches: List[Dict[str, Union[int, Dict[str, int], None, List[int]]]],
                    errcode: int,
+                   sim_syms: Optional[Set[Symbol]] = None,
                    simulate_all: bool = False,
     ):
         if self.errcode_filter and errcode != self.errcode_filter:
