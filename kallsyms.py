@@ -103,17 +103,27 @@ class Kallsyms:
 
         self.remapped_syms = self.__read_symbols()
 
-        for module, syms in self.remapped_syms.items():
-            if module.startswith('__builtin') or module.startswith('bpf:'):
-                min_addr = self.__get_min_addr(syms)
-                max_addr = self.__get_max_addr(syms)
-                sz = max_addr - min_addr
-                self.intervals[min_addr:max_addr] = module
+        # Collect all builtins
+        builtin_syms = [v for (k, v) in self.remapped_syms.items() if k.startswith('__builtin_')]
+        bpf_syms = [v for (k, v) in self.remapped_syms.items() if k.startswith('bpf:')]
+
+        # builtins are page aligned
+        for syms in builtin_syms:
+            min_addr = self.__get_min_addr(syms)
+            max_addr = self.__get_max_addr(syms)
+            if max_addr - min_addr < 4096:
+                max_addr = min_addr + 4096
+                syms[-1] = (syms[-1][0], syms[-1][1], syms[-1][2], max_addr - syms[-1][1])
+            self.intervals[min_addr:max_addr] = syms
+
+        for syms in bpf_syms + builtin_syms:
+            min_addr = self.__get_min_addr(syms)
+            max_addr = self.__get_max_addr(syms)
+            self.intervals[min_addr:max_addr] = syms
 
         self.exes = dict()
 
         self.__read_module_syms(obj_basenames)
-
         self.__read_vmlinux_syms(obj_basenames)
 
         # create sorted list of (module-address, module-name)
@@ -354,10 +364,12 @@ class Kallsyms:
 
             return [(s[0], s[1] - base_addr, s[2], s[3]) for s in syms if s[1] >= base_addr and s[1] < max_addr]
 
-    def __get_min_addr(self, syms:List[Tuple[str, int, str, Optional[int]]]) -> int:
+    @staticmethod
+    def __get_min_addr(syms:List[Tuple[str, int, str, Optional[int]]]) -> int:
         return min([s[1] for s in syms if s[2] in {'t', 'T', 'r', 'R'}])
 
-    def __get_max_addr(self, syms:List[Tuple[str, int, str, Optional[int]]]) -> int:
+    @staticmethod
+    def __get_max_addr(syms:List[Tuple[str, int, str, Optional[int]]]) -> int:
         return max([s[1] + s[3] for s in syms if s[2] in {'t', 'T', 'r', 'R'} and s[3] is not None])
 
 
@@ -381,8 +393,6 @@ class Kallsyms:
             # Builtin sections can overlap each other, which angr doesn't like. So
             # we are not going to merge them. And instead we are creating each one a
             # unique name with a different suffix.
-            if module_name.startswith('__builtin_ftrace'):
-                pass
             if module_name.startswith('__builtin') or module_name in {'bpf'}:
                 suffix = builtin_index[module_name]
                 builtin_index[module_name] += 1
