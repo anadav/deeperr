@@ -46,6 +46,10 @@ ignore_funcs_nopure = {
 
 # Returns the number of uncopied bytes unlike memcpy
 
+class DisassemblyError(Exception):
+    def __init__(self, msg:str):
+        self.msg = msg
+
 class Angr:
     type_map: Dict[str, angr.cle.backends.SymbolType] = dict()
     step_func_proc_trace = angr.SIM_PROCEDURES['stubs']['ReturnUnconstrained']()
@@ -276,7 +280,7 @@ class Angr:
             return
         if not self.disasm_sym(sym):
             self.disasm_sym(sym)
-            raise Exception(f"Failed to disasm {sym.name}")
+            raise DisassemblyError(f"Failed to disasm {sym.name}")
         insns = self.disasm_sym_cache[sym]
 
         # Skip on decode problem
@@ -669,7 +673,11 @@ class Angr:
                     a.proj.hook(insn.address, RepHook(insn.mnemonic).run, length=insn.size)
                     a.hooked_rep_string_addr.add(insn.address)
 
-            self.for_each_insn_in_sym(sym, hook, angr=self)
+            try:
+                self.for_each_insn_in_sym(sym, hook, angr=self)
+            except DisassemblyError:
+                pr_msg(f"Failed to disassemble {sym.name}", level='DEBUG')
+                pass
             self.code_hooks_done.add(sym)
 
         self.remove_unsupported_pyvex_insn_one_sym(sym)
