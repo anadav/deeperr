@@ -39,6 +39,14 @@ def change_output(f_name:str):
     except Exception as exc:
         raise ValueError(f'error opening output file {f_name}: {str(exc)}')
 
+def set_debug(d:bool):
+    global debug
+    debug = d
+
+def set_quiet(q:bool):
+    global quiet
+    quiet = q
+
 def pr_msg(msg: str, level:str='INFO', new_line_before:bool=False, new_line_after:bool=False):
     global output_file
 

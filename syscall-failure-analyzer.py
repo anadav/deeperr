@@ -21,7 +21,7 @@ from kallsyms import Kallsyms, get_vmlinux
 from kprobesrecorder import KProbesRecorder
 from kprobesreporter import KprobesReporter
 from reporter import Reporter
-from prmsg import pr_msg, quiet, warn_once, change_output
+from prmsg import pr_msg, quiet, warn_once, change_output, set_debug, set_quiet
 from ptrace.debugger.child import createChild
 from ptrace.tools import locateProgram
 from syscall import ErrorcodeInfo, SyscallInfo
@@ -121,8 +121,6 @@ def valid_path(path):
         raise argparse.ArgumentTypeError(f"Path '{path}' does not exist.")
 
 def main():
-    global quiet, debug
-
     def arg_error(parser: argparse.ArgumentParser):
         # add suffix to the usage string
         parser.print_help()
@@ -172,8 +170,8 @@ def main():
     elif args.verbose:
         loglevel = 'INFO'
 
-    quiet = args.quiet
-    debug = args.debug
+    set_quiet(args.quiet)
+    set_debug(args.debug)
 
     logging.basicConfig(filename='deeperr.log', level=loglevel, force=True)
     logging.getLogger().setLevel(loglevel)
