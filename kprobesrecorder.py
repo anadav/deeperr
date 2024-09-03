@@ -228,7 +228,6 @@ class KProbesRecorder(Recorder):
            
             snapshot = self.cleanup_callstack(snapshot)
             snapshot = self.remove_snapshot_irqs(snapshot)
-            # TODO: Save the reachable syms
             snapshot = self.remove_untracked_from_snapshot(snapshot, probe_syms)
 
             # Save regardless to live analysis
@@ -236,7 +235,7 @@ class KProbesRecorder(Recorder):
                                      trace=snapshot,
                                      pid=process.pid,
                                      probe_addrs=probe_addrs,
-                                     sim_syms=reachable_syms)
+                                     sim_syms=probe_syms)
             
             if self.early_stop:
                 for p in self.dbg.list:
@@ -257,8 +256,6 @@ class KProbesRecorder(Recorder):
         sys_exit_event.trigger = None
 
     def get_ftrace_snapshot_syms(self, snapshot:List[Dict[str,Any]]) -> Set[Symbol]:
-        assert self.angr_mgr is not None
-
         syms = {entry['callstack_syms'][0] for entry in snapshot
                       if entry['type'] == 'func' and 'callstack_syms' in entry}
 
