@@ -291,8 +291,11 @@ class Kallsyms:
                                if section.has(lief.ELF.Section.FLAGS.ALLOC)
                                and 'percpu' not in section.name
                                and '.note' not in section.name]
+
+        # We do not want writable sections, but some of them still have the write flag
         sections_to_load = [section.name for section in sections_to_alloc
-                            if not section.has(lief.ELF.Section.FLAGS.WRITE)]
+                            if not section.has(lief.ELF.Section.FLAGS.WRITE) or
+                                'rodata' in section.name]
         section_names_to_alloc = {section.name for section in sections_to_alloc}
 
         base_addr = min([section.virtual_address for section in sections_to_alloc])
