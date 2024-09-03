@@ -5,6 +5,7 @@ import logging
 import time
 import angr
 import capstone
+from dwarf import ELFDWARFAnalyzer
 from cle.backends import Symbol
 from arch import arch
 from angrmgr import Angr
@@ -66,6 +67,7 @@ class AngrSim:
         self.errcode = errcode
         self.detailed_trace = detailed_trace
         self.angr_mgr = angr_mgr
+        self.return_type_cache: Dict[Symbol, str] = dict()
 
         self.reset_state(entry_addr = branches[0]['from_ip'],
                          branches = branches,
@@ -612,6 +614,26 @@ class AngrSim:
         assert isinstance(res['simulation diverged'], int)
         res['simulation diverged'] += 1
 
+    def is_void_functions(self, s:angr.SimState) -> bool:
+        sym = self.angr_mgr.get_sym(s)
+
+        if sym in self.return_type_cache:
+            return self.return_type_cache[sym] == "void"
+
+        addr = sym.linked_addr
+        if not sym.owner or not sym.owner.binary:
+            return False
+
+        with ELFDWARFAnalyzer(sym.owner.binary) as d:
+            cu = d.find_cu_by_address(addr)
+            if cu is None:
+                return False
+
+            t = d.find_function_return_type(cu, addr)
+
+        self.return_type_cache[sym] = t
+        return t == "void"
+
     def simulate(self) -> Dict[str, Union[List, int]]:
         errno = self.errcode
         ret_addr = self.caller_ret_addr
@@ -655,6 +677,8 @@ class AngrSim:
                     continue
 
                 sym_name = self.angr_mgr.get_sym_name(s.addr)
+                #pr_msg("simulating {0} -> {1} ({2: <20}) {3} {4}".format(hex(insn.address),
+                #    hex(s.addr), sym_name, insn.mnemonic, insn.op_str))
                 logging.debug("simulating {0} -> {1} ({2: <20}) {3} {4}".format(hex(insn.address),
                     hex(s.addr), sym_name, insn.mnemonic, insn.op_str))
 
@@ -695,6 +719,8 @@ class AngrSim:
         dv: angr.SimState
 
         for dv in Pbar(bar_title, diverged_list, unit="state"):
+            if self.is_void_functions(dv):
+                continue
             start_state = dv.copy()
             backtrack_attempts += 1
             
