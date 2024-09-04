@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Optional, Tuple, List, Any
+from typing import Optional, Tuple, List, Dict, Any, Union
 from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarfinfo import DWARFInfo
 from elftools.dwarf.ranges import BaseAddressEntry, RangeEntry
@@ -8,6 +8,7 @@ from elftools.dwarf.die import DIE
 from elftools.dwarf.descriptions import describe_form_class
 from elftools.common.exceptions import DWARFError
 from elftools.dwarf.lineprogram import LineProgram
+from elftools.dwarf.compileunit import CompileUnit
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ class ELFDWARFAnalyzer:
         self.filename = filename
         self.elffile = None
         self.dwarfinfo = None
+        self._aranges = None
 
     def __enter__(self):
         self.elffile = ELFFile(open(self.filename, 'rb'))
@@ -24,20 +26,17 @@ class ELFDWARFAnalyzer:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self._aranges = None
         if self.elffile:
             self.elffile.stream.close()
 
     def find_cu_by_address(self, address: int) -> Optional[Any]:
         """Find the Compilation Unit (CU) containing the given address."""
-        aranges = self.dwarfinfo.get_aranges()
-        cu_offset = aranges.cu_offset_at_addr(address)
-        #d = { cu.cu_offset: cu for cu in self.dwarfinfo.iter_CUs() }
-        #print (len(d))
+        if self._aranges is None:
+            self._aranges = self.dwarfinfo.get_aranges()
+        cu_offset = self._aranges.cu_offset_at_addr(address)
         if cu_offset is not None:
             return self.dwarfinfo.get_CU_at(cu_offset)
-        #    for CU in self.dwarfinfo.iter_CUs():
-        #        if CU.cu_offset == cu_offset:
-        #            return CU
         return None
 
     def get_referenced_die(self, cu: Any, attr: Any) -> Optional[DIE]:
@@ -73,23 +72,6 @@ class ELFDWARFAnalyzer:
 
         return "void"
     
-    def retrieve_type_die(self, die: DIE, depth: int = 0) -> Optional[DIE]:
-        """Retrieve the type DIE of a DIE."""
-        if depth > 10:
-            return None
-
-        if 'DW_AT_type' in die.attributes:
-            type_attr = die.attributes['DW_AT_type']
-            type_die = self.get_referenced_die(die.cu, type_attr)
-            return type_die
-
-        if 'DW_AT_abstract_origin' in die.attributes:
-            origin_attr = die.attributes['DW_AT_abstract_origin']
-            origin_die = self.get_referenced_die(die.cu, origin_attr)
-            return self.retrieve_type_die(origin_die, depth + 1)
-
-        return None
-    
     def retrieve_name(self, die: DIE, depth: int = 0) -> str:
         """Resolve the type name of a DIE."""
         if depth > 10:
@@ -105,7 +87,7 @@ class ELFDWARFAnalyzer:
 
         return "void"
 
-    def find_function_return_type(self, cu: Any, func_address: int) -> Optional[str]:
+    def find_function_return_type(self, cu, func_address: int) -> Optional[str]:
         """Find the return type of a function at a given address."""
         for die in cu.get_top_DIE().iter_children():
             if die.tag != 'DW_TAG_subprogram':
@@ -128,7 +110,7 @@ class ELFDWARFAnalyzer:
         logger.warning(f"No return type found for function at address {hex(func_address)}")
         return None
 
-    def find_source_location(self, addr: int) -> List[Tuple[Optional[str], Optional[int], Optional[int], Optional[str]]]:
+    def find_source_location(self, addr: int) -> List[Dict[str, Optional[Union[str, int]]]]:
         """Find the source file, line number, and column for a given function address, accounting for inlined code."""
         cu = self.find_cu_by_address(addr)
         if cu is None:
@@ -147,44 +129,37 @@ class ELFDWARFAnalyzer:
         tags = {'DW_TAG_subprogram', 'DW_TAG_inlined_subroutine'}
         dies = self.find_dies_containing_address(cu, tags, addr)
         # find first subprogram
-        subprogram_dies = [die for die in dies if die.tag == 'DW_TAG_subprogram']
-        subprogram_name = None
-        if subprogram_dies:
-            subprogram_die = subprogram_dies[0]
-            subprogram_name = self.retrieve_name(subprogram_die)
+        subprogram_die = next((die for die in dies if die.tag == 'DW_TAG_subprogram'), None)
+        subprogram_name = self.retrieve_name(subprogram_die) if subprogram_die else None
 
         inline_dies = [die for die in dies if die.tag == 'DW_TAG_inlined_subroutine']
         if len(inline_dies) > 0:
             inline_locations = [self.process_inlined_subroutine(die) for die in inline_dies]
-            # sort according to first parameter
             inline_locations.sort(key=lambda x: x[0], reverse=True)
 
             for _, call_file, call_line, call_column, callee_name in inline_locations:
-                locations.append((filename, line, column, callee_name))
+                locations.append({'file': filename, 'line': line, 'col': column, 'func': callee_name})
                 filename, line, column = call_file, call_line, call_column
 
-        locations.append((filename, line, column, subprogram_name))
+        locations.append({'file': filename, 'line': line, 'col': column, 'func': subprogram_name})
 
-        for a,b,c,d in locations:
-             print(f"{a} {b} {c} {d}")
         if not locations:
             logger.warning(f"No source location found for address {hex(addr)}")
         
         return locations
 
     def get_line_program_entry(self, line_program: LineProgram, addr: int) -> Optional[Tuple[Optional[str], Optional[int], Optional[int]]]:
-        prev_state = None
+        state = None
         for entry in line_program.get_entries():
-            if entry.state is None:
-                continue
-            if entry.state.address > addr:
+            if entry.state and entry.state.address > addr:
                 break
-            prev_state = entry.state
+            if entry.state:
+                state = entry.state
 
-        if prev_state:
-            file_entry = line_program['file_entry'][prev_state.file]
+        if state:
+            file_entry = line_program['file_entry'][state.file]
             filename = self.get_full_path(line_program, file_entry)
-            return (filename, prev_state.line, prev_state.column)
+            return (filename, state.line, state.column)
         return None
 
     def get_full_path(self, line_program: LineProgram, file_entry) -> str:
@@ -222,26 +197,9 @@ class ELFDWARFAnalyzer:
 
         return False
 
-    def find_dies_containing_address(self, cu, tags, addr):
+    def find_dies_containing_address(self, cu, tags, addr:int):
         return [die for die in cu.iter_DIEs()
                 if die.attributes and die.tag in tags and self.die_contains_address(die, cu, addr)]
-
-    def process_die_and_parents(self, die, locations):
-        current_die = die
-        while current_die:
-            if current_die.tag == 'DW_TAG_inlined_subroutine':
-                self.process_inlined_subroutine(current_die, locations)
-
-            if current_die.tag == 'DW_TAG_subprogram':
-                self.process_subprogram(current_die, locations)
-            
-            # Check for abstract origin
-            if 'DW_AT_abstract_origin' in current_die.attributes:
-                abstract_origin = current_die.get_DIE_from_attribute('DW_AT_abstract_origin')
-                if abstract_origin:
-                    self.process_abstract_origin(abstract_origin, locations)
-            
-            current_die = current_die.get_parent()
 
     def process_subprogram(self, die, locations):
         file_name = self.get_die_source_file(die)
