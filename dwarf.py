@@ -206,7 +206,32 @@ class ELFDWARFAnalyzer:
             directory = line_program['include_directory'][dir_index].decode('utf-8')
         return os.path.join(directory, file_entry.name.decode('utf-8'))
 
-    def die_contains_address(self, die, cu, addr):
+    def die_contains_address(self, die, cu:CompileUnit, addr:int) -> bool:
+        # Check for range list
+        if 'DW_AT_ranges' in die.attributes:
+            ranges_offset = die.attributes['DW_AT_ranges'].value
+            ranges_list = self.dwarfinfo.range_lists().get_range_list_at_offset(ranges_offset, cu)
+            base_address = None
+            for entry in ranges_list:
+                if isinstance(entry, BaseAddressEntry):
+                    base_address = entry.base_address
+                elif isinstance(entry, RangeEntry):
+                    if base_address is None:
+                        if 'DW_AT_low_pc' in die.attributes: 
+                            base_address = die.attributes['DW_AT_low_pc'].value
+                        else:
+                            top_die = cu.get_top_DIE()
+                            base_address = top_die.attributes['DW_AT_low_pc'].value if 'DW_AT_low_pc' in top_die.attributes else None
+                     
+                    begin_offset = entry.begin_offset
+                    end_offset = entry.end_offset
+                    if not entry.is_absolute:
+                        begin_offset += base_address
+                        end_offset += base_address
+
+                    if begin_offset <= addr < end_offset:
+                        return True
+
         # Check for simple address range
         if 'DW_AT_low_pc' in die.attributes and 'DW_AT_high_pc' in die.attributes:
             low_pc = die.attributes['DW_AT_low_pc'].value
@@ -216,6 +241,9 @@ class ELFDWARFAnalyzer:
                     else high_pc_attr.value)
             if low_pc <= addr < high_pc:
                 return True
+
+
+        return False
 
     def find_dies_containing_address(self, cu, tags, addr:int):
         return [die for die in cu.iter_DIEs()
