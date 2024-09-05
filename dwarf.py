@@ -138,10 +138,10 @@ class ELFDWARFAnalyzer:
         # Use DIEs to find inlined function information
         tags = {'DW_TAG_subprogram', 'DW_TAG_inlined_subroutine'}
         dies = self.find_dies_containing_address(cu, tags, addr)
-        dies_with_ancestors = set()
-        for die in dies:
-            dies_with_ancestors.update(self._get_ancestors(die))
-        dies = list(dies_with_ancestors)
+#        dies_with_ancestors = set()
+#        for die in dies:
+#            dies_with_ancestors.update(self._get_ancestors(die))
+#        dies = list(dies_with_ancestors)
         # find first subprogram
         subprogram_die = next((die for die in dies if die.tag == 'DW_TAG_subprogram'), None)
         subprogram_name = self.retrieve_name(subprogram_die) if subprogram_die else None
@@ -197,6 +197,25 @@ class ELFDWARFAnalyzer:
 
         # If no valid entry is found
         return ('<unknown>', None, None)
+    
+    def get_full_path(self, line_program: LineProgram, file_entry) -> str:
+        dir_index = file_entry.dir_index
+        if dir_index == 0:
+            directory = '.'
+        else:
+            directory = line_program['include_directory'][dir_index].decode('utf-8')
+        return os.path.join(directory, file_entry.name.decode('utf-8'))
+
+    def die_contains_address(self, die, cu, addr):
+        # Check for simple address range
+        if 'DW_AT_low_pc' in die.attributes and 'DW_AT_high_pc' in die.attributes:
+            low_pc = die.attributes['DW_AT_low_pc'].value
+            high_pc_attr = die.attributes['DW_AT_high_pc']
+            high_pc = (low_pc + high_pc_attr.value
+                    if describe_form_class(high_pc_attr.form) == 'constant'
+                    else high_pc_attr.value)
+            if low_pc <= addr < high_pc:
+                return True
 
     def find_dies_containing_address(self, cu, tags, addr:int):
         return [die for die in cu.iter_DIEs()
