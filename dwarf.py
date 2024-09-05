@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Optional, Tuple, List, Dict, Any, Union
+from typing import Optional, Tuple, List, Set, Dict, Any, Union
 from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarfinfo import DWARFInfo
 from elftools.dwarf.ranges import BaseAddressEntry, RangeEntry
@@ -110,6 +110,16 @@ class ELFDWARFAnalyzer:
         logger.warning(f"No return type found for function at address {hex(func_address)}")
         return None
 
+    @staticmethod
+    def _get_ancestors(die: DIE) -> Set[DIE]:
+        """Get the ancestors of a DIE."""
+        ancestors = set()
+        current_die = die
+        while current_die:
+            ancestors.add(current_die)
+            current_die = current_die.get_parent()
+        return ancestors
+
     def find_source_location(self, addr: int) -> List[Dict[str, Optional[Union[str, int]]]]:
         """Find the source file, line number, and column for a given function address, accounting for inlined code."""
         cu = self.find_cu_by_address(addr)
@@ -128,6 +138,10 @@ class ELFDWARFAnalyzer:
         # Use DIEs to find inlined function information
         tags = {'DW_TAG_subprogram', 'DW_TAG_inlined_subroutine'}
         dies = self.find_dies_containing_address(cu, tags, addr)
+        dies_with_ancestors = set()
+        for die in dies:
+            dies_with_ancestors.update(self._get_ancestors(die))
+        dies = list(dies_with_ancestors)
         # find first subprogram
         subprogram_die = next((die for die in dies if die.tag == 'DW_TAG_subprogram'), None)
         subprogram_name = self.retrieve_name(subprogram_die) if subprogram_die else None
@@ -150,56 +164,43 @@ class ELFDWARFAnalyzer:
 
     def get_line_program_entry(self, line_program: LineProgram, addr: int) -> Optional[Tuple[Optional[str], Optional[int], Optional[int]]]:
         state = None
+        prev_state = None
+
+        # Iterate over entries to process the state machine
         for entry in line_program.get_entries():
-            if entry.state and entry.state.address > addr:
-                break
+            if not entry.state:
+                continue  # Skip entries without a state
+
             if entry.state:
-                state = entry.state
+                current_state = entry.state
 
-        if state:
-            file_entry = line_program['file_entry'][state.file]
+            # Handle the end sequence by invalidating the current state
+            if entry.state and  entry.state.end_sequence:
+                prev_state = None  # Invalidate state on end sequence
+                continue  # Move to the next entry
+
+            # Check if we have a valid previous state and if the address falls within the range
+            if prev_state and prev_state.address <= addr < current_state.address:
+                # The address falls between prev_state and current_state
+                file_entry = line_program['file_entry'][prev_state.file]
+                filename = self.get_full_path(line_program, file_entry)
+                return (filename, prev_state.line, prev_state.column)
+
+            # Update the previous state to the current state for the next iteration
+            prev_state = current_state
+
+        # If no match was found in the loop, handle the last state if applicable
+        if prev_state and prev_state.address <= addr:
+            file_entry = line_program['file_entry'][prev_state.file]
             filename = self.get_full_path(line_program, file_entry)
-            return (filename, state.line, state.column)
-        return None
+            return (filename, prev_state.line, prev_state.column)
 
-    def get_full_path(self, line_program: LineProgram, file_entry) -> str:
-        dir_index = file_entry.dir_index
-        if dir_index == 0:
-            directory = '.'
-        else:
-            directory = line_program['include_directory'][dir_index].decode('utf-8')
-        return os.path.join(directory, file_entry.name.decode('utf-8'))
-
-    def die_contains_address(self, die, cu, addr):
-        # Check for simple address range
-        if 'DW_AT_low_pc' in die.attributes and 'DW_AT_high_pc' in die.attributes:
-            low_pc = die.attributes['DW_AT_low_pc'].value
-            high_pc_attr = die.attributes['DW_AT_high_pc']
-            high_pc = (low_pc + high_pc_attr.value
-                    if describe_form_class(high_pc_attr.form) == 'constant'
-                    else high_pc_attr.value)
-            if low_pc <= addr < high_pc:
-                return True
-
-        # Check for range list
-        if 'DW_AT_ranges' in die.attributes:
-            ranges_offset = die.attributes['DW_AT_ranges'].value
-            ranges_list = self.dwarfinfo.range_lists().get_range_list_at_offset(ranges_offset, cu)
-            base_address = 0
-            for entry in ranges_list:
-                if isinstance(entry, BaseAddressEntry):
-                    base_address = entry.base_address
-                elif isinstance(entry, RangeEntry):
-                    begin_offset = base_address + entry.begin_offset
-                    end_offset = base_address + entry.end_offset
-                    if begin_offset <= addr < end_offset:
-                        return True
-
-        return False
+        # If no valid entry is found
+        return ('<unknown>', None, None)
 
     def find_dies_containing_address(self, cu, tags, addr:int):
         return [die for die in cu.iter_DIEs()
-                if die.attributes and die.tag in tags and self.die_contains_address(die, cu, addr)]
+                if die.attributes and self.die_contains_address(die, cu, addr)]
 
     def process_subprogram(self, die, locations):
         file_name = self.get_die_source_file(die)
