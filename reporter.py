@@ -341,11 +341,16 @@ class Reporter(metaclass=abc.ABCMeta):
             else:
                 col_str = f':{e["col"]}' if e['col'] is not None else '' 
                 fileline = f'{e["file"]}:{e["line"]}{col_str}'
+                funcname = '??'
+                if e['func'] is not None:
+                    funcname = e['func']
+                elif sym is not None:
+                    funcname = sym.name
 
                 failure_pointer = ' <--' if failure_returning_function_index == i else ''
 
                 pr_msg("{0: <40}  {1: <40}  {2}() {3}".format(
-                    bin_loc, fileline, e['func'], failure_pointer), level='DATA')
+                    bin_loc, fileline, funcname, failure_pointer), level='DATA')
 
     def get_analysis_order(self,
                            branches: List[Dict],
