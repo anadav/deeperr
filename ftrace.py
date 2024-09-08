@@ -171,7 +171,6 @@ class Ftrace:
         self.kprobes_disabled = False
         #self.kprobes:Dict[Tuple[int, bool], 'Ftrace'.KprobeEvent] = dict()
         self.kprobes:Dict[str, 'Ftrace'.KprobeEvent] = dict()
-        self.available_filter_functions = None
         self.kprobe_event_file = None
         self.kprobe_blacklist:Optional[List[Tuple[int,int]]] = None
         self.events = dict()

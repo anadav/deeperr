@@ -4,6 +4,7 @@ import re
 import logging
 import subprocess
 from collections import defaultdict
+from dwarf import ELFDWARFAnalyzer
 from typing import List, Dict, Optional, Tuple
 
 class Addr2Line:
@@ -48,10 +49,25 @@ class Addr2Line:
         # Split the addresses according to the file (the first in the tuple)
         addr_dict:defaultdict[str, List[int]] = defaultdict(list)
 
+        result:Dict[Tuple[str, int], List[Dict]] = {}
+
+        # Group the addresses by object file
+        obj_dict = defaultdict(list)
+        if True:
+            for obj, addr in obj_addrs:
+                obj_dict[obj].append(addr)
+
+            for obj, addrs in obj_dict.items():
+                with ELFDWARFAnalyzer(obj) as dw:
+                    for addr in addrs:
+                        result[(obj,addr)] = dw.find_source_location(addr)
+            return result
+        result = {}
+
+        obj_dict = defaultdict(list)
         for obj, addr in obj_addrs:
             addr_dict[obj].append(addr)
 
-        result:Dict[Tuple[str, int], List[Dict]] = {}
         for obj, addrs in addr_dict.items():
             addr_args = [hex(a) for a in addrs]
 

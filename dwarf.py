@@ -4,6 +4,7 @@ from typing import Optional, Tuple, List, Set, Dict, Any, Union
 from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarfinfo import DWARFInfo
 from elftools.dwarf.ranges import BaseAddressEntry, RangeEntry
+from elftools.dwarf.aranges import ARanges
 from elftools.dwarf.die import DIE
 from elftools.dwarf.descriptions import describe_form_class
 from elftools.common.exceptions import DWARFError
@@ -17,8 +18,8 @@ class ELFDWARFAnalyzer:
     def __init__(self, filename: str):
         self.filename = filename
         self.elffile = None
-        self.dwarfinfo = None
-        self._aranges = None
+        self.dwarfinfo:Optional[DWARFInfo] = None
+        self._aranges:Optional[ARanges] = None
 
     def __enter__(self):
         self.elffile = ELFFile(open(self.filename, 'rb'))
@@ -32,6 +33,8 @@ class ELFDWARFAnalyzer:
 
     def find_cu_by_address(self, address: int) -> Optional[Any]:
         """Find the Compilation Unit (CU) containing the given address."""
+        if self.dwarfinfo is None:
+            raise DWARFError("DWARF info not loaded")
         if self._aranges is None:
             self._aranges = self.dwarfinfo.get_aranges()
         cu_offset = self._aranges.cu_offset_at_addr(address)
@@ -41,6 +44,8 @@ class ELFDWARFAnalyzer:
 
     def get_referenced_die(self, cu: Any, attr: Any) -> Optional[DIE]:
         """Get the DIE referenced by an attribute."""
+        if self.dwarfinfo is None:
+            raise DWARFError("DWARF info not loaded")
         form_class = describe_form_class(attr.form)
         if form_class == 'reference':
             if attr.form.startswith('DW_FORM_ref'):
@@ -110,18 +115,10 @@ class ELFDWARFAnalyzer:
         logger.warning(f"No return type found for function at address {hex(func_address)}")
         return None
 
-    @staticmethod
-    def _get_ancestors(die: DIE) -> Set[DIE]:
-        """Get the ancestors of a DIE."""
-        ancestors = set()
-        current_die = die
-        while current_die:
-            ancestors.add(current_die)
-            current_die = current_die.get_parent()
-        return ancestors
-
     def find_source_location(self, addr: int) -> List[Dict[str, Optional[Union[str, int]]]]:
         """Find the source file, line number, and column for a given function address, accounting for inlined code."""
+        if self.dwarfinfo is None:
+            raise DWARFError("DWARF info not loaded")
         cu = self.find_cu_by_address(addr)
         if cu is None:
             logger.warning(f"No CU found for address {hex(addr)}")
@@ -136,17 +133,21 @@ class ELFDWARFAnalyzer:
             filename, line, column = self.get_line_program_entry(line_program, addr)
 
         # Use DIEs to find inlined function information
-        tags = {'DW_TAG_subprogram', 'DW_TAG_inlined_subroutine'}
-        dies = self.find_dies_containing_address(cu, tags, addr)
-#        dies_with_ancestors = set()
-#        for die in dies:
-#            dies_with_ancestors.update(self._get_ancestors(die))
-#        dies = list(dies_with_ancestors)
-        # find first subprogram
-        subprogram_die = next((die for die in dies if die.tag == 'DW_TAG_subprogram'), None)
+        subprogram_die = self.find_subprogram_die_containing_address(cu, addr)
+        if subprogram_die is None:
+            inline_dies = []
+        else:
+            inline_dies = self.find_inlined_subroutine_dies_containing_address(cu, subprogram_die, addr)
+        
+        if False:
+            tags = {'DW_TAG_subprogram', 'DW_TAG_inlined_subroutine'}
+            dies = self.find_dies_containing_address(cu, tags, addr)
+
+            # find first subprogram
+            subprogram_die = next((die for die in dies if die.tag == 'DW_TAG_subprogram'), None)
+            inline_dies = [die for die in dies if die.tag == 'DW_TAG_inlined_subroutine']
         subprogram_name = self.retrieve_name(subprogram_die) if subprogram_die else None
 
-        inline_dies = [die for die in dies if die.tag == 'DW_TAG_inlined_subroutine']
         if len(inline_dies) > 0:
             inline_locations = [self.process_inlined_subroutine(die) for die in inline_dies]
             inline_locations.sort(key=lambda x: x[0], reverse=True)
@@ -162,7 +163,7 @@ class ELFDWARFAnalyzer:
         
         return locations
 
-    def get_line_program_entry(self, line_program: LineProgram, addr: int) -> Optional[Tuple[Optional[str], Optional[int], Optional[int]]]:
+    def get_line_program_entry(self, line_program: LineProgram, addr: int) -> Tuple[Optional[str], Optional[int], Optional[int]]:
         state = None
         prev_state = None
 
@@ -208,6 +209,8 @@ class ELFDWARFAnalyzer:
 
     def die_contains_address(self, die, cu:CompileUnit, addr:int) -> bool:
         # Check for range list
+        if self.dwarfinfo is None:
+            raise DWARFError("DWARF info not loaded")
         if 'DW_AT_ranges' in die.attributes:
             ranges_offset = die.attributes['DW_AT_ranges'].value
             ranges_list = self.dwarfinfo.range_lists().get_range_list_at_offset(ranges_offset, cu)
@@ -226,6 +229,9 @@ class ELFDWARFAnalyzer:
                     begin_offset = entry.begin_offset
                     end_offset = entry.end_offset
                     if not entry.is_absolute:
+                        if base_address is None:
+                            logger.warning("No base address found for relative range entry")
+                            continue
                         begin_offset += base_address
                         end_offset += base_address
 
@@ -242,10 +248,30 @@ class ELFDWARFAnalyzer:
             if low_pc <= addr < high_pc:
                 return True
 
-
         return False
 
-    def find_dies_containing_address(self, cu, tags, addr:int):
+    def find_subprogram_die_containing_address(self, cu:CompileUnit, addr:int) -> Optional[DIE]:
+        q = [cu.get_top_DIE()]
+        while len(q) > 0:
+            die = q.pop()
+            if die.tag in {'DW_TAG_compile_unit', 'DW_TAG_partial_unit', 'DW_TAG_namespace', 'DW_TAG_class_type'}:
+                q.extend(die.iter_children())
+            elif die.tag == 'DW_TAG_subprogram' and self.die_contains_address(die, cu, addr):
+                return die
+        return None
+
+    def find_inlined_subroutine_dies_containing_address(self, cu:CompileUnit, subprogram:DIE, addr:int) -> List[DIE]:
+        q = [subprogram]
+        inlined_dies = []
+        while len(q) > 0:
+            die = q.pop()
+            if die.tag == 'DW_TAG_inlined_subroutine' and self.die_contains_address(die, cu, addr):
+                inlined_dies.append(die)
+            q.extend(die.iter_children())
+
+        return inlined_dies
+
+    def find_dies_containing_address2(self, cu, tags, addr:int):
         return [die for die in cu.iter_DIEs()
                 if die.attributes and self.die_contains_address(die, cu, addr)]
 
@@ -296,6 +322,6 @@ class ELFDWARFAnalyzer:
         file_index = file_attr.value
         line_program = self.dwarfinfo.line_program_for_CU(die.cu)
         file_entries = line_program['file_entry']
-        if 0 < file_index <= len(file_entries):
-            return self.get_full_path(line_program, file_entries[file_index - 1])
+        if file_index < len(file_entries):
+            return self.get_full_path(line_program, file_entries[file_index])
         return None

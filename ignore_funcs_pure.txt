@@ -89,7 +89,6 @@ delay_tsc
 destroy_inode
 _raw_spin_unlock_irq
 truncate_inode_pages_final
-__inode_wait_for_writeback
 evict
 __inode_wait_for_writeback
 iput

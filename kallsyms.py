@@ -160,14 +160,15 @@ class Kallsyms:
         return None
 
     @staticmethod
-    def get_ro_sections(binary:lief.ELF.Binary) -> Dict[str, Dict[str, any]]:
+    def get_ro_sections(binary:lief.ELF.Binary) -> Dict[str, Dict[str, Any]]:
         sections = dict()
         for section in binary.sections:
-            if section.name.startswith('.note'):
+            section_name = str(section.name)
+            if section_name.startswith('.note'):
                 continue
             if ((section.has(lief.ELF.Section.FLAGS.ALLOC) and not section.has(lief.ELF.Section.FLAGS.WRITE))
-                or section.name.startswith('.rodata')):
-                sections[section.name] = {
+                or section_name.startswith('.rodata')):
+                sections[section_name] = {
                     'address': section.virtual_address,
                     'size': section.size,
                     'symbols': []
@@ -175,7 +176,7 @@ class Kallsyms:
 
         return sections
 
-    def __read_module_syms(self, obj_basenames:Dict[str, io.BufferedReader]) -> Dict[str, List[Tuple[str, int, str, Optional[int]]]]:
+    def __read_module_syms(self, obj_basenames:Dict[str, io.BufferedReader]):
         obj_names = self.remapped_syms.keys()
         parsed_module_names = self.parsed_modules.keys()
 
@@ -186,7 +187,9 @@ class Kallsyms:
             if path is None:
                 continue
 
-            binary = lief.parse(path)
+            binary = lief.ELF.parse(path)
+            if binary is None:
+                continue
 
             # Check build-id
             build_id = Kallsyms.get_build_id(binary)
@@ -198,9 +201,10 @@ class Kallsyms:
 
             # Populate the dictionary with symbols
             for s in binary.symbols:
-                if s.name != '' and s.size != 0 and s.section is not None and s.section.name in sections:
+                section_name = str(s.section.name)
+                if s.name != '' and s.size != 0 and s.section is not None and section_name in sections:
                     symbol_info = (s.name, s.value, lief_to_angr_type_map[s.type], s.size)
-                    sections[s.section.name]['symbols'].append(symbol_info)
+                    sections[section_name]['symbols'].append(symbol_info)
 
             live_sections = Kallsyms.read_live_module_sections(obj_name)
 
@@ -224,12 +228,18 @@ class Kallsyms:
                 }
 
         for exe, details in self.exes.items():
+            assert isinstance(details['mapped_addr'], int)
+            assert isinstance(details['size'], int)
+
             self.intervals[details['mapped_addr']:details['mapped_addr'] + details['size']] = exe
 
         to_remove_exes = []
         for exe, details in self.exes.items():
             if exe in to_remove_exes:
                 continue
+            
+            assert isinstance(details['mapped_addr'], int)
+            assert isinstance(details['size'], int)
 
             overlap = self.intervals.overlap(details['mapped_addr'], details['mapped_addr'] + details['size'])
             n_ovelapping = len(overlap)
@@ -260,7 +270,7 @@ class Kallsyms:
         for exe in to_remove_exes:
             del self.exes[exe]
 
-    def __read_vmlinux_syms(self, obj_basenames:Dict[str, io.BufferedReader]) -> Tuple[int, List[Tuple[str, int, str, Optional[int]]]]:
+    def __read_vmlinux_syms(self, obj_basenames:Dict[str, io.BufferedReader]): 
         path = obj_basenames['vmlinux'].name if 'vmlinux' in obj_basenames else None
 
         remapped_base = None
@@ -280,7 +290,10 @@ class Kallsyms:
             pr_msg(f'Could not find vmlinux file', level='ERROR')
             raise FileNotFoundError(f'Could not find vmlinux file')
 
-        binary = lief.parse(path)
+        binary = lief.ELF.parse(path)
+        if binary is None:
+            pr_msg(f'Could not parse vmlinux file', level='ERROR')
+            raise Exception(f'Could not parse vmlinux file {path}')
         build_id = Kallsyms.get_build_id(binary)
         live_build_id = Kallsyms.get_build_id_from_kernel_notes(pathlib.Path("/sys/kernel/notes"))
         if live_build_id != build_id:
@@ -471,8 +484,8 @@ class Kallsyms:
         return Kallsyms.extract_build_id(data)
 
     @staticmethod
-    def read_live_module_sections(module:str) -> Dict[str, Dict[str, int]]:
-        module_sections = {}
+    def read_live_module_sections(module:str) -> Dict[str, int]:
+        module_sections:Dict[str, int] = {}
 
         module_path = os.path.join('/sys/module', module, 'sections')
         if not os.path.isdir(module_path):

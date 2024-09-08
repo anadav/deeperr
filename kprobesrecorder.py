@@ -256,6 +256,8 @@ class KProbesRecorder(Recorder):
         sys_exit_event.trigger = None
 
     def get_ftrace_snapshot_syms(self, snapshot:List[Dict[str,Any]]) -> Set[Symbol]:
+        assert self.angr_mgr is not None
+
         syms = {entry['callstack_syms'][0] for entry in snapshot
                       if entry['type'] == 'func' and 'callstack_syms' in entry}
 

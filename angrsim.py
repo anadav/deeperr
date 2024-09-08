@@ -677,8 +677,6 @@ class AngrSim:
                     continue
 
                 sym_name = self.angr_mgr.get_sym_name(s.addr)
-                #pr_msg("simulating {0} -> {1} ({2: <20}) {3} {4}".format(hex(insn.address),
-                #    hex(s.addr), sym_name, insn.mnemonic, insn.op_str))
                 logging.debug("simulating {0} -> {1} ({2: <20}) {3} {4}".format(hex(insn.address),
                     hex(s.addr), sym_name, insn.mnemonic, insn.op_str))
 

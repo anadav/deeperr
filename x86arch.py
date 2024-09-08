@@ -176,7 +176,6 @@ class ArchX86(Arch):
 
     @property
     def syscall_entry_points(self) -> Set[str]:
-        #return {'entry_SYSCALL_64', 'entry_SYSCALL_64_after_hwframe'}
         return {'do_syscall_64'}
     
     def controlStatePluginArch(self) -> ControlStatePluginX86:
