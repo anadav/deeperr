@@ -201,8 +201,8 @@ class Kallsyms:
 
             # Populate the dictionary with symbols
             for s in binary.symbols:
-                section_name = str(s.section.name)
-                if s.name != '' and s.size != 0 and s.section is not None and section_name in sections:
+                section_name = str(s.section.name) if s.section is not None else None
+                if s.name != '' and s.size != 0 and section_name is not None and section_name in sections:
                     symbol_info = (s.name, s.value, lief_to_angr_type_map[s.type], s.size)
                     sections[section_name]['symbols'].append(symbol_info)
 

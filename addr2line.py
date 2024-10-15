@@ -53,7 +53,7 @@ class Addr2Line:
 
         # Group the addresses by object file
         obj_dict = defaultdict(list)
-        if True:
+        if False:
             for obj, addr in obj_addrs:
                 obj_dict[obj].append(addr)
 
