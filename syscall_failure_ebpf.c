@@ -133,8 +133,8 @@ int trace_syscalls(struct tracepoint__raw_syscalls__sys_exit *args) {
     syscall_events.perf_submit(args, &event, sizeof(event));
 
     flags = *flags_ptr;
-    if (flags & STOP_ON_ERROR)
-        bpf_send_signal(SIGSTOP);
+    //if (flags & STOP_ON_ERROR)
+    bpf_send_signal(SIGSTOP);
 
     return 0;
 }
