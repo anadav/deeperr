@@ -52,21 +52,8 @@ class Addr2Line:
         result:Dict[Tuple[str, int], List[Dict]] = {}
 
         # Group the addresses by object file
-        obj_dict = defaultdict(list)
-        if False:
-            for obj, addr in obj_addrs:
-                obj_dict[obj].append(addr)
-
-            for obj, addrs in obj_dict.items():
-                with ELFDWARFAnalyzer(obj) as dw:
-                    for addr in addrs:
-                        result[(obj,addr)] = dw.find_source_location(addr)
-            return result
-        result = {}
-
-        obj_dict = defaultdict(list)
-        for obj, addr in obj_addrs:
-            addr_dict[obj].append(addr)
+        for obj, address in obj_addrs:
+            addr_dict[obj].append(address)
 
         for obj, addrs in addr_dict.items():
             addr_args = [hex(a) for a in addrs]
@@ -99,25 +86,28 @@ class Addr2Line:
 
                 line_re = self.addr2line_loc_re
 
-            func = None
+            func: Optional[str] = None
+            current_addr: Optional[int] = None
+            skip: bool = False
 
             for l in output.splitlines():
                 if l == "":
                     continue
                 elif l.startswith("0x"):
-                    addr = int(l, 16)
+                    current_addr = int(l, 16)
                     func = None
-                    skip = (obj, addr) in result
+                    skip = (obj, current_addr) in result
                     if not skip:
-                        result[(obj, addr)] = list()
+                        result[(obj, current_addr)] = list()
                 elif func is None:
                     func = l
-                elif not skip:
+                elif not skip and current_addr is not None:
                     m = line_re.match(l)
-                    d = m.groupdict()
-                    col = int(d['col']) if 'col' in d else None
-                    loc = {'func':func, 'file':d['file'], 'line':int(d['line']), 'col':col}
-                    result[obj, addr].append(loc)
+                    if m:
+                        d = m.groupdict()
+                        col = int(d['col']) if 'col' in d else None
+                        loc = {'func':func, 'file':d['file'], 'line':int(d['line']), 'col':col}
+                        result[obj, current_addr].append(loc)
                     func = None
             
         return result

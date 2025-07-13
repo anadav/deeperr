@@ -691,9 +691,13 @@ class AngrSim:
 
         pr_msg("checking simulation...", level='DEBUG')
 
-        if (not self.is_simulation_successful(self.simgr.deadended) or
+
+        simulation_successful = self.is_simulation_successful(self.simgr.deadended)
+        if (not simulation_successful or
             not 'diverged' in self.simgr.stashes or
             len(self.simgr.stashes['diverged']) == 0):
+            if simulation_successful:
+                pr_msg("simulation successful, but no divergence found", level='DEBUG')
             raise SystemError("simulation failed")
         
         errorcode_callstack_depth = len(self.simgr.deadended[0].callstack)
