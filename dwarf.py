@@ -139,13 +139,6 @@ class ELFDWARFAnalyzer:
         else:
             inline_dies = self.find_inlined_subroutine_dies_containing_address(cu, subprogram_die, addr)
         
-        if False:
-            tags = {'DW_TAG_subprogram', 'DW_TAG_inlined_subroutine'}
-            dies = self.find_dies_containing_address(cu, tags, addr)
-
-            # find first subprogram
-            subprogram_die = next((die for die in dies if die.tag == 'DW_TAG_subprogram'), None)
-            inline_dies = [die for die in dies if die.tag == 'DW_TAG_inlined_subroutine']
         subprogram_name = self.retrieve_name(subprogram_die) if subprogram_die else None
 
         if len(inline_dies) > 0:
