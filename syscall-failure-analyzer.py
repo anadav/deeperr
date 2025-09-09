@@ -10,6 +10,8 @@ import pickle
 import sys
 import io
 import lz4.frame
+import subprocess
+import shutil
 from typing import Optional, Set, List, BinaryIO
 
 from angrmgr import Angr
@@ -145,7 +147,7 @@ def main():
     parser.add_argument('--path', '-p', action='store', dest='src_path', default=None, type=valid_path, help='path to source code')
     parser.add_argument('--nokcore', '-w', action='store_true', dest='nokcore', help='do not save kcore')
     parser.add_argument('--early-stop', '-e', action='store_true', dest='early_stop', help='stop execution after first failure')
-    parser.add_argument('command', choices=['record', 'report'], help='command to run: record or report')
+    parser.add_argument('command', choices=['record', 'report', 'install'], help='command to run: record, report, or install')
 
     parser.usage = parser.format_usage()[7:].rstrip('\n ') + ' -- <command> [args]\n'
 
@@ -155,9 +157,22 @@ def main():
         # Exit with error
         exit(1)
 
-    if os.geteuid() != 0:
-        pr_msg(f'{sys.executable} must be run as root', level='FATAL')
-        exit(1)
+    if args.command == 'install':
+        if os.geteuid() != 0:
+            pr_msg(f'Install mode must be run as root', level='FATAL')
+            exit(1)
+    elif os.geteuid() != 0 and args.command in ['record', 'report']:
+        # Check if capabilities are set
+        try:
+            result = subprocess.run(['getcap', sys.executable], capture_output=True, text=True)
+            if 'cap_sys_rawio' not in result.stdout:
+                pr_msg(f'This tool requires root privileges or proper capabilities.', level='FATAL')
+                pr_msg(f'Run "sudo {sys.executable} {__file__} install" to set up permissions.', level='INFO')
+                exit(1)
+        except:
+            pr_msg(f'This tool requires root privileges.', level='FATAL')
+            pr_msg(f'Run "sudo {sys.executable} {__file__} install" to set up permissions.', level='INFO')
+            exit(1)
 
     if remaining_argv and remaining_argv[0] == '--':
         remaining_argv = remaining_argv[1:]
@@ -198,6 +213,83 @@ def main():
     if args.command == 'record' and len(remaining_argv) < 1:
         arg_error(parser)
 
+    if args.command == 'install':
+        pr_msg('Setting up permissions for unprivileged users...', level='INFO')
+        
+        # Set perf_event_paranoid to -1
+        try:
+            with open('/proc/sys/kernel/perf_event_paranoid', 'w') as f:
+                f.write('-1')
+            pr_msg('Set /proc/sys/kernel/perf_event_paranoid to -1', level='INFO')
+        except Exception as e:
+            pr_msg(f'Failed to set perf_event_paranoid: {e}', level='ERROR')
+        
+        # Make it persistent across reboots
+        try:
+            sysctl_conf = '/etc/sysctl.d/99-syscall-analyzer.conf'
+            with open(sysctl_conf, 'w') as f:
+                f.write('# Configuration for syscall-failure-analyzer\n')
+                f.write('kernel.perf_event_paranoid = -1\n')
+            pr_msg(f'Created {sysctl_conf} for persistent settings', level='INFO')
+        except Exception as e:
+            pr_msg(f'Failed to create sysctl config: {e}', level='ERROR')
+        
+        # Find the actual Python executable that will be used
+        python_path = sys.executable
+        pr_msg(f'Current Python executable: {python_path}', level='INFO')
+        
+        # Find the real Python binary (resolve all symlinks)
+        real_python_path = os.path.realpath(python_path)
+        pr_msg(f'Real Python binary: {real_python_path}', level='INFO')
+        
+        # Also check which python3 to handle different environments
+        which_python = shutil.which('python3')
+        if which_python:
+            which_python_real = os.path.realpath(which_python)
+            pr_msg(f'System python3: {which_python_real}', level='INFO')
+        
+        # Set capabilities on the real Python executable
+        try:
+            subprocess.run(['setcap', 'cap_sys_rawio,cap_sys_admin,cap_sys_ptrace,cap_dac_read_search+ep', real_python_path], 
+                         check=True, capture_output=True, text=True)
+            pr_msg(f'Set capabilities on {real_python_path}', level='INFO')
+        except subprocess.CalledProcessError as e:
+            pr_msg(f'Failed to set capabilities on {real_python_path}: {e.stderr}', level='ERROR')
+            pr_msg(f'You may need to manually set capabilities on your Python binary', level='WARN')
+        
+        # Find perf executable and set capabilities
+        perf_path = shutil.which('perf')
+        if perf_path:
+            try:
+                subprocess.run(['setcap', 'cap_sys_admin,cap_sys_ptrace,cap_syslog+ep', perf_path],
+                             check=True, capture_output=True, text=True)
+                pr_msg(f'Set capabilities on {perf_path}', level='INFO')
+            except subprocess.CalledProcessError as e:
+                pr_msg(f'Failed to set capabilities on perf: {e.stderr}', level='ERROR')
+        else:
+            pr_msg('perf not found in PATH', level='WARN')
+        
+        # Create a helper script for running without sudo
+        script_path = os.path.abspath(__file__)
+        helper_script = os.path.join(os.path.dirname(script_path), 'syscall-analyzer')
+        try:
+            with open(helper_script, 'w') as f:
+                f.write('#!/bin/bash\n')
+                f.write(f'# Helper script for syscall-failure-analyzer\n')
+                f.write(f'exec {python_path} {script_path} "$@"\n')
+            os.chmod(helper_script, 0o755)
+            pr_msg(f'Created helper script: {helper_script}', level='INFO')
+        except Exception as e:
+            pr_msg(f'Failed to create helper script: {e}', level='ERROR')
+        
+        pr_msg('\nInstallation complete!', level='INFO')
+        pr_msg('You can now run the tool without sudo:', level='INFO')
+        pr_msg(f'  {helper_script} record --syscall <syscall> -- <command>', level='INFO')
+        pr_msg(f'  {helper_script} report', level='INFO')
+        pr_msg('\nNote: Some features may still require elevated privileges.', level='WARN')
+        pr_msg('If you encounter permission issues, try running with sudo.', level='WARN')
+        return
+    
     if args.command == 'record':
         kprobes = args.kprobes
 

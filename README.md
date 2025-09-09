@@ -87,11 +87,29 @@ its name or number as an argument when running syscall-failure-analyzer. This
 enables the tool to specifically target and analyze that particular syscall for
 failures.
 
-#### Sudoer Requirement
+#### Permission Setup
 
-This tool requires sudo permissions to access specific system features like
-kcore and kallsyms. Therefore, you should run pip requirements as well as the
-tool itself with sudo permissions.
+This tool requires elevated privileges to access system features like kcore and kallsyms. You have two options:
+
+##### Option 1: One-time Installation (Recommended)
+
+Run the install mode once with sudo to set up permissions for unprivileged users:
+
+```bash
+sudo /path/to/venv/bin/python3 ./syscall-failure-analyzer.py install
+```
+
+This will:
+- Set kernel.perf_event_paranoid to -1 (for Intel PT access)
+- Create persistent configuration in /etc/sysctl.d/
+- Set necessary capabilities on Python and perf binaries
+- Create a helper script for easier execution
+
+After installation, you can run the tool without sudo using the generated helper script.
+
+##### Option 2: Run with Sudo
+
+Alternatively, you can run the tool with sudo permissions each time.
 
 #### Virtual Environment Setup
 
@@ -129,6 +147,15 @@ environment.
     ln -s /usr/lib/python3/dist-packages/bcc myvenv/lib/$(python3 -c "import sys; print('python{}.{}'.format(sys.version_info.major, sys.version_info.minor))")/site-packages/bcc
     ```
 
+7. **Run Install Mode (Optional but Recommended)**
+
+    After setting up the virtual environment, run the install mode to configure permissions:
+    ```bash
+    sudo myvenv/bin/python3 ./syscall-failure-analyzer.py install
+    ```
+    
+    This allows you to run the tool without sudo in the future.
+
 #### Recording Syscall Failure
 
 Before deploying or running the project, ensure the virtual environment is activated. If it's not, activate it using:
@@ -141,6 +168,12 @@ To record syscall failures, use the following command. This example targets the
 first failure of `setregid` syscall when running Linux Test Project's `setregid03`
 test:
 
+**If you ran the install mode:**
+```bash
+./syscall-analyzer --kprobes --syscall=setregid -n 1 record /opt/ltp/testcases/bin/setregid03
+```
+
+**If you didn't run install mode:**
 ```bash
 sudo python3 ./syscall-failure-analyzer.py --kprobes --syscall=setregid -n 1 record /opt/ltp/testcases/bin/setregid03
 ```
@@ -151,6 +184,12 @@ sudo python3 ./syscall-failure-analyzer.py --kprobes --syscall=setregid -n 1 rec
 
 After recording, generate a report using the following command:
 
+**If you ran the install mode:**
+```bash
+./syscall-analyzer --syscall=setregid report
+```
+
+**If you didn't run install mode:**
 ```bash
 sudo python3 ./syscall-failure-analyzer.py --syscall=setregid report
 ```

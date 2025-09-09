@@ -195,7 +195,8 @@ class Kallsyms:
             build_id = Kallsyms.get_build_id(binary)
             live_build_id = Kallsyms.get_module_build_id(obj_name)
             if live_build_id != build_id:
-                raise Exception(f"Build ID mismatch for {obj_name}")
+                pr_msg(f"Build ID mismatch for {obj_name}, continuing anyway", level='WARNING')
+                pr_msg(f"  Debug symbols may not match the loaded module", level='WARNING')
 
             sections = Kallsyms.get_ro_sections(binary)
 
