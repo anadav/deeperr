@@ -1,24 +1,24 @@
 # Copyright 2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
-import logging
+# import logging  # Unused
 from typing import Optional, List, Dict, Any, Set, Iterable, Tuple, Union
 import os
 import pathlib
 import pickle
-import gzip
+# import gzip  # Unused
 import io
 import lz4.frame
 
-from collections import defaultdict
+# from collections import defaultdict  # Unused
 import ptrace
 import ptrace.debugger.child
 import ptrace.debugger.process
-import ptrace.syscall.ptrace_syscall
+# import ptrace.syscall.ptrace_syscall  # Unused
 import ptrace.tools
 
 from arch import arch
 from angrmgr import Angr
-from cle.backends import Symbol
+from cle.backends.symbol import Symbol
 from ftrace import Ftrace
 from kallsyms import Kallsyms
 from kcore import Kcore
@@ -30,7 +30,7 @@ class Recorder:
         self,
         perf: str,
         output: str,
-        kcore: 'Kcore',
+        kcore: Optional['Kcore'],
         objs: List[io.BufferedReader],
         snapshot_size: int,
         syscall_filter: Optional[int],
@@ -39,11 +39,12 @@ class Recorder:
         debug: bool,
         save_kcore: bool,
         early_stop: bool,
-    ):
+    ) -> None:
         self.output = output
         self.failures: List[Dict] = []
         self.snapshot_size = max(snapshot_size, 128 * 1024)
-        self.dbg = ptrace.debugger.debugger.PtraceDebugger()
+        from ptrace.debugger.debugger import PtraceDebugger
+        self.dbg = PtraceDebugger()
         self.perf = perf
         self.syscall_filter = syscall_filter
         self.errcode_filter = errcode_filter
@@ -72,13 +73,13 @@ class Recorder:
             'sendfile': 'sendfile64',
         }
 
-    def detach_all_processes(self):
+    def detach_all_processes(self) -> None:
         if self.dbg is None:
             return
         for p in self.dbg.list:
             p.detach()
 
-    def save_failures(self, type_str:str):
+    def save_failures(self, type_str: str) -> None:
         if len(self.failures) == 0:
             return
 
@@ -99,24 +100,25 @@ class Recorder:
 
         try:
             with lz4.frame.open(self.output, 'wb') as f:
-                pickle.dump(data, f)
+                pickle.dump(data, f)  # type: ignore[arg-type]
         except IOError:
             pr_msg("error writing to result file", level="ERROR")
 
-    def set_sysexit_filter(self, ftrace_instance:Ftrace, snapshot:bool):
+    def set_sysexit_filter(self, ftrace_instance: Ftrace, snapshot: bool) -> 'Ftrace.Event':
         e_class, e_subclass, filter = self.get_filter_string(exit=True)
         syscall_event = ftrace_instance.get_event(f'{e_class}/{e_subclass}')
-        syscall_event.filter = filter
-        if snapshot:
-            syscall_event.trigger = f'snapshot if {filter}'
+        if filter is not None:
+            syscall_event.filter = filter
+            if snapshot:
+                syscall_event.trigger = f'snapshot if {filter}'
         return syscall_event
 
-    def restart_syscall(self, process:ptrace.debugger.process.PtraceProcess, syscall:PtraceSyscall):
+    def restart_syscall(self, process: ptrace.debugger.process.PtraceProcess, syscall: PtraceSyscall) -> None:
         rip = process.getInstrPointer()
         process.setInstrPointer(rip - arch.syscall_insn_len)
         process.setreg(arch.ret_reg_name, syscall.syscall)
 
-    def print_syscall_info(self, syscall:PtraceSyscall):
+    def print_syscall_info(self, syscall: PtraceSyscall) -> None:
         msg = f'syscall "{syscall.name}" ({syscall.syscall}) failed with error [{syscall.result_text}]'
 
         pr_msg(msg, level="INFO", new_line_before=True)
@@ -146,7 +148,7 @@ class Recorder:
 
         return success
 
-    def rename_old_res_file(self, output:str):
+    def rename_old_res_file(self, output: str) -> None:
         res_file_path = pathlib.Path(output)
         if res_file_path.exists():
             try:
@@ -157,7 +159,7 @@ class Recorder:
                 raise e
 
 
-    def init_process(self, args:'list[str]'):
+    def init_process(self, args: List[str]) -> None:
         args[0] = ptrace.tools.locateProgram(args[0])
         if not os.path.isfile(args[0]):
             raise FileNotFoundError(f"Error: file {args[0]} does not exist")
