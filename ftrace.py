@@ -10,9 +10,9 @@ import pathlib
 import re
 import struct
 import sys
-from typing import Any, Dict, Iterable, List, Optional, Set, TextIO, Tuple, Union, Callable
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union, Callable
 
-from cle.backends import Symbol
+from cle.backends.symbol import Symbol
 from prmsg import Pbar, pr_msg
 from arch import arch
 
@@ -139,7 +139,7 @@ class Ftrace:
 
         return True
 
-    def remove(self):
+    def remove(self) -> None:
         if self.deleted:
             return
 
@@ -158,10 +158,10 @@ class Ftrace:
         self.trace_path = None
         self.deleted = True
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.remove()
 
-    def __init__(self, instance_name:Optional[str] = None):
+    def __init__(self, instance_name: Optional[str] = None) -> None:
         self.cache:Dict[str, str] = dict()
         self.debug = False
         self.instances:Optional[Dict[str, 'Ftrace']] = None
@@ -227,7 +227,7 @@ class Ftrace:
         self.__read_available_tracers()
         self.__read_available_filter_functions()
     
-    def init_kprobe_base(self, kprobe_base_sym_name:str, get_addr_fn:Callable[[str], Optional[int]]):
+    def init_kprobe_base(self, kprobe_base_sym_name: str, get_addr_fn: Callable[[str], Optional[int]]) -> None:
         self.kprobe_base_sym_name = kprobe_base_sym_name
         #self.kprobe_base_sym_addr = get_addr_fn(kprobe_base_sym_name)
         self.sym_addrs = dict()
@@ -242,7 +242,7 @@ class Ftrace:
                 self.sym_addrs[sym] = None
         self.read_invalid_kprobe_addrs()
 
-    def get_instance(self, instance_name:str):
+    def get_instance(self, instance_name: str) -> 'Ftrace':
         if self.instances is None:
             raise Exception("cannot create ftrace instance from non-main instance")
         if instance_name not in self.instances:
@@ -252,7 +252,7 @@ class Ftrace:
                 raise Exception("cannot create ftrace instance")
         return self.instances[instance_name]
 
-    def __init_kprobes(self):
+    def __init_kprobes(self) -> None:
         if self.instance_name is not None:
             return
         
@@ -292,7 +292,7 @@ class Ftrace:
         self.kprobes_cleared = True
 
 
-    def __read_available_filter_functions(self):
+    def __read_available_filter_functions(self) -> None:
         self.available_filter_functions = set()
         txt = self.trace_path.joinpath("available_filter_functions").read_text()
         for line in txt.splitlines():
@@ -310,16 +310,16 @@ class Ftrace:
     def is_available_filter_function(sym:Symbol) -> bool:
         return Ftrace.main_instance().__is_available_filter_function(sym)
 
-    def read_cached(self, prop:str) -> str:
+    def read_cached(self, prop: str) -> str:
         if prop not in self.cache:
             self.cache[prop] = self.trace_path.joinpath(prop).read_text().strip()
         return self.cache[prop]
 
-    def write_cached(self, prop:str, content:str):
+    def write_cached(self, prop: str, content: str) -> None:
         self.trace_path.joinpath(prop).write_text(content)
         self.cache[prop] = content
     
-    def __read_available_tracers(self):
+    def __read_available_tracers(self) -> None:
         txt = self.trace_path.joinpath("available_tracers").read_text()
         self.available_tracers = txt.strip().split(' ')
 
@@ -347,14 +347,14 @@ class Ftrace:
     def func_filter(self, funcs:Iterable[str]):
         self.write_cached("set_ftrace_filter", '\n'.join(funcs))
 
-    def __read_kernel_table(self, start_sym:str, end_sym:str) -> Tuple[bytes, int, int]:
+    def __read_kernel_table(self, start_sym: str, end_sym: str) -> Tuple[bytes, int, int]:
         start_table = self.sym_addrs[start_sym]
         stop_table = self.sym_addrs[end_sym]
         assert start_table is not None and stop_table is not None
         table = Kcore().read(start_table, stop_table - start_table)
         return table, start_table, stop_table
 
-    def __read_jump_table(self):
+    def __read_jump_table(self) -> None:
         table, start_table, stop_table = self.__read_kernel_table('__start___jump_table', '__stop___jump_table') 
 
         for base in range(start_table, stop_table, 16):
@@ -362,7 +362,7 @@ class Ftrace:
             code_offset, _, _ = struct.unpack('iiL', table[offset:offset + 16])
             self.invalid_kprobe_addrs.append(base + code_offset)
 
-    def __read_static_call_table(self):
+    def __read_static_call_table(self) -> None:
         table, start_table, stop_table = self.__read_kernel_table('__start_static_call_sites', '__stop_static_call_sites')
             
         STATIC_CALL_SITE_INIT = 2
@@ -374,7 +374,7 @@ class Ftrace:
             if not (key & STATIC_CALL_SITE_INIT):
                 self.invalid_kprobe_addrs.append(addr)
 
-    def read_invalid_kprobe_addrs(self):
+    def read_invalid_kprobe_addrs(self) -> None:
         if self.invalid_kprobe_addrs is not None:
             return
 
@@ -386,13 +386,13 @@ class Ftrace:
         # TODO: Read modules tables
         self.invalid_kprobe_addrs.sort()
 
-    def is_invalid_kprobe_addr(self, addr) -> bool:
+    def is_invalid_kprobe_addr(self, addr: int) -> bool:
         assert self.invalid_kprobe_addrs is not None
         idx = bisect.bisect_left(self.invalid_kprobe_addrs, addr)
         return (idx >= 0 and idx < len(self.invalid_kprobe_addrs) and
                 self.invalid_kprobe_addrs[idx] == addr)
 
-    def is_kprobe_blacklisted(self, addr:int) -> bool:
+    def is_kprobe_blacklisted(self, addr: int) -> bool:
         if self.kprobe_blacklist is None:
             with open('/sys/kernel/debug/kprobes/blacklist') as f:
                 self.kprobe_blacklist = [
@@ -430,7 +430,7 @@ class Ftrace:
         return ((not self.is_kprobe_blacklisted(addr)) and
                 (not self.is_invalid_kprobe_addr(addr)))
 
-    def kprobe_event_disable_all(self, force_quiet:bool=False):
+    def kprobe_event_disable_all(self, force_quiet: bool = False) -> None:
         if self.kprobes_disabled:
             return 0
         #dirs = ([] if not event_probe_path.exists() else
@@ -443,7 +443,7 @@ class Ftrace:
 
         self.kprobes_disabled = True
 
-    def kprobe_event_close(self, force_quiet:bool=False):
+    def kprobe_event_close(self, force_quiet: bool = False) -> None:
         if self.kprobe_event_file is None:
             return
 
@@ -460,7 +460,7 @@ class Ftrace:
     def kprobe_event_file_path(self) -> pathlib.Path:
         return self.trace_path.joinpath("kprobe_events")
 
-    def kprobe_event_open(self):
+    def kprobe_event_open(self) -> None:
         if self.kprobe_event_file is not None:
             return
 
@@ -469,11 +469,11 @@ class Ftrace:
         except:
             raise Exception(f'error opening {self.kprobe_event_file_path}')
 
-    def kprobe_event_reopen(self):
+    def kprobe_event_reopen(self) -> None:
         self.kprobe_event_close()
         self.kprobe_event_open()
 
-    def __kprobe_event_write(self, s:str) -> bool:
+    def __kprobe_event_write(self, s: str) -> bool:
         file = self.kprobe_event_file
 
         if file is None:
@@ -487,7 +487,7 @@ class Ftrace:
             return False
         return True
 
-    def kprobe_event_clear(self):
+    def kprobe_event_clear(self) -> None:
         if self.kprobes_cleared or not self.kprobe_event_file_path.exists():
             self.kprobes_cleared = True
             return
@@ -501,7 +501,7 @@ class Ftrace:
             kprobe.removed = True
         self.kprobes = dict()
 
-    def kprobe_event_write(self, s:str):
+    def kprobe_event_write(self, s: str) -> None:
         logging.debug(f'writing "{s}" to {self.kprobe_event_file_path}')
         
         success = self.__kprobe_event_write(s + '\n')
@@ -526,11 +526,11 @@ class Ftrace:
             raise Exception(f'invalid tracer {tracer}')
         self.write_cached('current_tracer', tracer)
 
-    def __get_pid(self, prop:str) -> List[int]:
+    def __get_pid(self, prop: str) -> List[int]:
         data = self.read_cached(prop)
         return [int(v.strip()) for v in data.splitlines()]
     
-    def __set_pid(self, prop:str, pids:Union[int, List[int], None]):
+    def __set_pid(self, prop: str, pids: Union[int, List[int], None]) -> None:
         if pids is None:
             s = ''
         elif isinstance(pids, int):
@@ -575,17 +575,17 @@ class Ftrace:
     def snapshot_file(self) -> pathlib.Path:
         return self.trace_path.joinpath('snapshot')
 
-    def disable_snapshot(self):
+    def disable_snapshot(self) -> None:
         self.snapshot_file.write_text('0')
 
-    def clear_snapshot(self):
+    def clear_snapshot(self) -> None:
         self.snapshot_file.write_text('1')
         self.snapshot_file.write_text('2')
 
-    def get_bool(self, path:str) -> bool:
+    def get_bool(self, path: str) -> bool:
         return self.trace_path.joinpath(path).read_text()[0] != 0
 
-    def set_bool(self, path:str, enable:bool):
+    def set_bool(self, path: str, enable: bool) -> None:
         self.trace_path.joinpath(path).write_text(str(int(enable)))
 
     @property
@@ -596,15 +596,15 @@ class Ftrace:
     def irq_info(self, enable:bool):
         self.set_bool('options/irq-info', enable)       
 
-    def open_trace_pipe(self, is_async:bool=False) -> io.BufferedReader:
+    def open_trace_pipe(self, is_async: bool = False) -> io.BufferedReader:
         k = 'async' if is_async else 'sync'
         if k in self.pipes:
             return self.pipes[k]
 
         self.pipes[k] = self.trace_path.joinpath("trace_pipe").open("r")
         if is_async:
-            fctnl_flags = fcntl.fcntl(self.pipes[k].fileno(), fcntl.F_GETFL)
-            fcntl.fcntl(self.pipes[k], fcntl.F_SETFL, fctnl_flags|os.O_NONBLOCK)
+            fcntl_flags = fcntl.fcntl(self.pipes[k].fileno(), fcntl.F_GETFL)
+            fcntl.fcntl(self.pipes[k], fcntl.F_SETFL, fcntl_flags|os.O_NONBLOCK)
         return self.pipes[k]
 
     @property
@@ -612,7 +612,7 @@ class Ftrace:
         return self.open_trace_pipe(False)
     
     @property
-    def async_trace_pipe(self):
+    def async_trace_pipe(self) -> io.BufferedReader:
         return self.open_trace_pipe(True)
 
     def get_snapshot(self, skip_trace_events:List[str], resume_trace_events:List[str]) -> List[Dict[str, Any]]:
@@ -743,7 +743,7 @@ class Ftrace:
         return self.get_bool('tracing_on')
 
     @tracing_on.setter
-    def tracing_on(self, enable:bool):
+    def tracing_on(self, enable: bool) -> None:
         self.set_bool('tracing_on', enable)
 
     @property
@@ -751,7 +751,7 @@ class Ftrace:
         return self.get_bool('options/sym-addr')
 
     @sym_addr.setter
-    def sym_addr(self, enable:bool):
+    def sym_addr(self, enable: bool) -> None:
         self.set_bool('options/sym-addr', enable)
 
     @property
@@ -759,7 +759,7 @@ class Ftrace:
         return self.get_bool('options/func_stack_trace')
     
     @func_stack_trace.setter
-    def func_stack_trace(self, enable:bool):
+    def func_stack_trace(self, enable: bool) -> None:
         self.set_bool('options/func_stack_trace', enable)
 
     @property
@@ -767,7 +767,7 @@ class Ftrace:
         return self.get_bool('options/stacktrace')
     
     @stacktrace.setter
-    def stacktrace(self, enable:bool):
+    def stacktrace(self, enable: bool) -> None:
         self.set_bool('options/stacktrace', enable)
 
     @property
@@ -775,7 +775,7 @@ class Ftrace:
         return self.get_bool('options/function-fork')
 
     @function_fork.setter
-    def function_fork(self, enable:bool):
+    def function_fork(self, enable: bool) -> None:
         self.set_bool('options/function-fork', enable)
 
     @property
@@ -783,13 +783,13 @@ class Ftrace:
         return self.get_bool('options/event-fork')
 
     @event_fork.setter
-    def event_fork(self, enable:bool):
+    def event_fork(self, enable: bool) -> None:
         self.set_bool('options/event-fork', enable)
 
-    def remove_all_probes(self):
+    def remove_all_probes(self) -> None:
         self.kprobe_event_clear()
 
-    def get_event(self, name: str):
+    def get_event(self, name: str) -> 'Ftrace.Event':
         if name not in self.events:
             self.events[name] = self.Event(name, self)
         return self.events[name]
@@ -798,12 +798,12 @@ class Ftrace:
         path: pathlib.Path
         cache: Dict[str, str]
 
-        def __init__(self, path, ftrace):
+        def __init__(self, path: str, ftrace: 'Ftrace') -> None:
             self.ftrace = ftrace
             self.path = ftrace.trace_path.joinpath('events/' + path)
             self.cache = dict()
 
-        def __get(self, filename:str, default:Optional[str]=None) -> Optional[str]:
+        def __get(self, filename: str, default: Optional[str] = None) -> Optional[str]:
             if not self.path.exists():
                 if filename in self.cache:
                     del self.cache[filename]
@@ -812,12 +812,12 @@ class Ftrace:
                 self.cache[filename] = self.path.joinpath(filename).read_text()
             return self.cache[filename]
         
-        def __read(self, filename:str) -> str:
+        def __read(self, filename: str) -> str:
             v = self.__get(filename)
             assert v is not None
             return v
         
-        def __write(self, filename:str, v: str, default:Optional[str] = None):
+        def __write(self, filename: str, v: str, default: Optional[str] = None) -> None:
             if not self.path.exists():
                 if v != default:
                     raise IOError('path does not exist')
@@ -830,7 +830,7 @@ class Ftrace:
             return self.__get('enable', default='0') != '0'
         
         @enable.setter
-        def enable(self, v:bool):
+        def enable(self, v: bool) -> None:
             self.__write('enable', str(int(v)), default='0')
 
         @property
@@ -868,13 +868,13 @@ class Ftrace:
                      ftrace: 'Ftrace',
                      probe_type: str,
                      event_name: str,
-                     module_name: str,
+                     module_name: Optional[str],
                      target_function: Union[Symbol, str],
                      probe_offset: int,
                      extra: str = '',
                      event_type: str = 'kprobes',
                      identifier: Optional[int] = None,
-                     prepopulated: bool = False):
+                     prepopulated: bool = False) -> None:
             self.probe_type = probe_type
             self.identifier = identifier
             self.event_type = event_type
@@ -897,10 +897,10 @@ class Ftrace:
             
             ftrace.kprobes[self.event_path] = self
 
-        def __str__(self):
+        def __str__(self) -> str:
             return hex(self.addr)
 
-        def __repr__(self):
+        def __repr__(self) -> str:
             module_name = self.module_name if self.module_name != '' else 'kernel'
             target_function = self.target_function if isinstance(self.target_function, str) else self.target_function.name
 
@@ -942,7 +942,7 @@ class Ftrace:
             return super().enable
         
         @enable.setter
-        def enable(self, v:bool):
+        def enable(self, v: bool) -> None:
             assert(not self.removed)
             if v:
                 self.ftrace.kprobes_disabled = False
