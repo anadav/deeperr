@@ -19,6 +19,11 @@ class AngrSim:
     BACKTRACK_TIMEOUT: int = 60
     MAX_BACKTRACK_STEPS: int = 100
 
+    @staticmethod
+    def get_control(s: SimState) -> ControlStatePlugin:
+        """Extract and cast the control plugin from a state."""
+        return cast(ControlStatePlugin, s.control)  # type: ignore[attr-defined]
+
     def init_state(self, entry_addr: int) -> SimState:
         add_options = { angr.options.SYMBOLIC_WRITE_ADDRESSES,
                         angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
@@ -192,14 +197,14 @@ class AngrSim:
         n.register_plugin('callstack', cs, inhibit_init=True)
         hist = s.history.copy()
         n.register_plugin('history', hist, inhibit_init=True)
-        n.register_plugin('control', s.control, inhibit_init=True)  # type: ignore[attr-defined]
+        n.register_plugin('control', self.get_control(s), inhibit_init=True)
 
         return n
 
     def is_skipped_code(self, s: SimState) -> bool:
-        assert isinstance(s.control, ControlStatePlugin)  # type: ignore[attr-defined]
+        control = self.get_control(s)
 
-        if self.callstack_depth(s) > s.control.max_depth:  # type: ignore[attr-defined]
+        if self.callstack_depth(s) > control.max_depth:
             return True
         if s.history.jumpkind == 'Ijk_Ret' or self.callstack_depth(s) == 0:
             return False
@@ -223,7 +228,7 @@ class AngrSim:
         if self.angr_mgr.is_skipped_sym(s):
             return True
 
-        if s.control.only_symbols is not None and sym not in s.control.only_symbols:  # type: ignore[attr-defined]
+        if control.only_symbols is not None and sym not in control.only_symbols:
             return True
         
         return False
@@ -259,8 +264,8 @@ class AngrSim:
 
     @staticmethod
     def is_unconstrained_call_target_no_follow(s: SimState) -> bool:
-        assert isinstance(s.control, ControlStatePlugin)  # type: ignore[attr-defined]
-        return s.history.jumpkind == 'Ijk_Call' and s.control.backtracking  # type: ignore[attr-defined]
+        control = AngrSim.get_control(s)
+        return s.history.jumpkind == 'Ijk_Call' and control.backtracking
     
     @staticmethod
     def is_unconstrained_ret(s: SimState) -> bool:
@@ -268,15 +273,15 @@ class AngrSim:
 
     @staticmethod
     def update_state_max_depth(s: SimState) -> None:
-        assert isinstance(s.control, ControlStatePlugin)  # type: ignore[attr-defined]
+        control = AngrSim.get_control(s)
 
-        if s.control.no_callees:  # type: ignore[attr-defined]
-            s.control.max_depth = min(s.control.max_depth, AngrSim.callstack_depth(s))  # type: ignore[attr-defined]
+        if control.no_callees:
+            control.max_depth = min(control.max_depth, AngrSim.callstack_depth(s))
 
     def warn_potential_simulation_problem(self, s: SimState) -> None:
-        assert isinstance(s.control, ControlStatePlugin)  # type: ignore[attr-defined]
+        control = self.get_control(s)
 
-        if not s.control.detailed_trace and not s.control.backtracking:  # type: ignore[attr-defined]
+        if not control.detailed_trace and not control.backtracking:
             ip = Angr.state_ip(s)
             if ip is None:
                 return
@@ -293,8 +298,8 @@ class AngrSim:
 
     @staticmethod
     def split_ret_state(s: SimState) -> SimState:
-        assert isinstance(s.control, ControlStatePlugin)  # type: ignore[attr-defined]
-        branch = s.control.current_branch  # type: ignore[attr-defined]
+        control = AngrSim.get_control(s)
+        branch = control.current_branch
         assert isinstance(branch, Dict)
 
         ret_val = branch['ret']
@@ -302,8 +307,9 @@ class AngrSim:
         not_taken = s.copy()
         taken.add_constraints(taken.registers.load(arch.ret_reg_name) == ret_val)
         not_taken.add_constraints(not_taken.registers.load(arch.ret_reg_name) != ret_val)
-        not_taken.control.diverged = True  # type: ignore[attr-defined]
-        not_taken.control.expected_ip = None  # type: ignore[attr-defined]
+        not_taken_control = AngrSim.get_control(not_taken)
+        not_taken_control.diverged = True
+        not_taken_control.expected_ip = None
         return not_taken
 
     def backtrack_step_func(self, simgr: SimulationManager) -> SimulationManager:
@@ -339,7 +345,7 @@ class AngrSim:
 
     def prepare_simulation_step(self) -> None:
         for s in self.active_states:
-            control = cast(ControlStatePlugin, s.control)  # type: ignore[attr-defined]
+            control = self.get_control(s)
             control.diverged = False
             control.expected_ip = None
 
@@ -348,7 +354,7 @@ class AngrSim:
 
     def handle_exception(self) -> None:
         def is_exception(s: SimState) -> bool:
-            control = cast(ControlStatePlugin, s.control)  # type: ignore[attr-defined]
+            control = AngrSim.get_control(s)
             br = control.current_branch
             return br is not None and br.get('exception', False) and br['from_ip'] == Angr.state_ip(s)
 
@@ -359,15 +365,15 @@ class AngrSim:
             exception_state = s.copy()
             no_exception_state = s.copy()
             
-            assert isinstance(exception_state.control, ControlStatePlugin)
-            c = exception_state.control
+            c = AngrSim.get_control(exception_state)
             c.next_branch()
             assert isinstance(c.current_branch, Dict)
 
             addr = Angr.state_ip(s)
             successors = angr.engines.successors.SimSuccessors(addr, s)
             
-            no_exception_state.control.diverged = True
+            no_exception_control = AngrSim.get_control(no_exception_state)
+            no_exception_control.diverged = True
             successors.add_successor(state = no_exception_state,
                                     target = addr,
                                     guard = exception_state.solver.true,
@@ -390,21 +396,22 @@ class AngrSim:
    
     def move_to_diverged(self) -> None:
         self.drop_stash('active',
-                        filter_func=lambda s: s.control.diverged and self.is_ignored_function_on_stack(s))
-        self.move_states('active', 'diverged', lambda x: x.control.diverged)
+                        filter_func=lambda s: self.get_control(s).diverged and self.is_ignored_function_on_stack(s))
+        self.move_states('active', 'diverged', lambda x: self.get_control(x).diverged)
 
     def handle_predicated_mov(self) -> None:
         cmov_states = [s for s in self.active_states
-                        if s.control.detailed_trace and self.angr_mgr.is_predicated_mov(s)]  # type: ignore[attr-defined]
+                        if self.get_control(s).detailed_trace and self.angr_mgr.is_predicated_mov(s)]
 
         for s in cmov_states:
             ip = Angr.state_ip(s)
             insn = self.angr_mgr.get_insn(ip)
-            matched_entry = (s.control.current_branch['from_ip'] == ip and
-                             s.control.current_branch['to_ip'] == self.angr_mgr.next_insn_addr(insn))
+            control = self.get_control(s)
+            matched_entry = (control.current_branch['from_ip'] == ip and
+                             control.current_branch['to_ip'] == self.angr_mgr.next_insn_addr(insn))
             taken_predicated_mov = not matched_entry
             if matched_entry:
-                s.control.next_branch()
+                control.next_branch()
             successors = arch.predicated_mov_constraint(s, taken_predicated_mov, insn)
             self.remove_active_state(s)
             self.extend_active_states(successors)
@@ -446,7 +453,7 @@ class AngrSim:
             if op.type != capstone.x86.X86_OP_REG or op.size != 8:
                 continue
 
-            control = cast(ControlStatePlugin, s.control)  # type: ignore[attr-defined]
+            control = self.get_control(s)
             if control.current_branch is None or control.current_branch['from_ip'] != Angr.state_ip(s):
                 continue
 
@@ -460,7 +467,7 @@ class AngrSim:
         start_step_time = time.time()
 
         for s in simgr.active:  # type: ignore[union-attr]
-            control = cast(ControlStatePlugin, s.control)  # type: ignore[attr-defined]
+            control = self.get_control(s)
             control.update(s)
 
         #self.constrain_calls()
@@ -488,7 +495,7 @@ class AngrSim:
         return timed_out
 
     def _update_control(self, state: SimState, new_states: List[SimState]) -> None:
-        c = cast(ControlStatePlugin, state.control)  # type: ignore[attr-defined]
+        c = self.get_control(state)
         jump_source = state.history.jump_source
         insn = jump_source and self.angr_mgr.get_insn(jump_source)
 
@@ -562,7 +569,7 @@ class AngrSim:
 
         # Re-constrain the unconstrained states for indirect calls and returns
         for state in simgr.unconstrained:
-            c = state.control
+            c = self.get_control(state)
             if c.diverged:
                 continue
 
@@ -624,7 +631,7 @@ class AngrSim:
                     state.add_constraints(ret_reg == parent_ret_reg)
                     state.registers.store(ret_reg_name, parent_ret_reg)
 
-        simgr.move('unconstrained', 'active', lambda x: not x.control.diverged)
+        simgr.move('unconstrained', 'active', lambda x: not self.get_control(x).diverged)
 
         for state in simgr.active:
             self._update_control(state, new_states)
@@ -633,7 +640,7 @@ class AngrSim:
         simgr.drop(stash='unconstrained')
 
     def is_ret_failure(self, s: SimState) -> bool:
-        assert isinstance(s.control, ControlStatePlugin)  # type: ignore[attr-defined]
+        control = self.get_control(s)
 
         # Check if the last branch was a return
         if s.history.jumpkind != 'Ijk_Ret':
@@ -651,13 +658,13 @@ class AngrSim:
             raise SystemError("simulation failed")
 
         s = self.simgr.stashes['diverged'][-1]
-        assert isinstance(s.control, ControlStatePlugin)  # type: ignore[attr-defined]
+        control = self.get_control(s)
 
-        if s.control.expected_ip is None:
+        if control.expected_ip is None:
             raise SystemError("simulation failed")
 
-        s.control.diverged = False
-        s.registers.store(arch.ip_reg_name, s.control.expected_ip)
+        control.diverged = False
+        s.registers.store(arch.ip_reg_name, control.expected_ip)
 
         # Move s into active
         self.simgr.move('diverged', 'active', lambda x: x is s)
@@ -698,7 +705,7 @@ class AngrSim:
         active = self.active_states
         if not active:
             raise RuntimeError("No active states in simulation manager")
-        c = active[0].control
+        c = self.get_control(active[0])
         trace_length = len(c.branches) - 1
         c.no_callees = False
         c.only_symbols = self.sim_syms
@@ -709,7 +716,7 @@ class AngrSim:
 
         while len(self.simgr.deadended) == 0 and len(self.active_states) != 0:
             # All states should have the same instruction pointer
-            pbar.update_to(self.active_states[0].control.done_branches)
+            pbar.update_to(self.get_control(self.active_states[0]).done_branches)
 
             self.prepare_simulation_step()
             self.handle_exception()
@@ -726,7 +733,8 @@ class AngrSim:
             self.move_to_diverged()
 
             for s in self.active_states:
-                insn = s.control.last_insn
+                control = self.get_control(s)
+                insn = control.last_insn
                 if insn is None:
                     continue
 
@@ -735,7 +743,7 @@ class AngrSim:
                     hex(s.addr), sym_name, insn.mnemonic, insn.op_str))
 
             self.simgr.move('active', 'deadended',
-                            lambda x:len(x.control.branches) == 0 or self.is_ret_failure(x))
+                            lambda x:len(self.get_control(x).branches) == 0 or self.is_ret_failure(x))
 
             if len(self.simgr.deadended) == 0 and len(self.active_states) == 0:
                 pbar.set_description_str(f'{msg} (diverged)')
@@ -758,8 +766,8 @@ class AngrSim:
         res['errorcode return depth'] = errorcode_callstack_depth
 
         def filter_func(s: SimState) -> str:
-            assert isinstance(s.control, ControlStatePlugin)  # type: ignore[attr-defined]
-            if s.addr != ret_addr and len(s.callstack) != s.control.stop_depth:
+            control = AngrSim.get_control(s)
+            if s.addr != ret_addr and len(s.callstack) != control.stop_depth:
                 return 'active'
             return 'stashed' if AngrSim.is_failure(s, errno) else 'deadended' 
        
@@ -785,11 +793,11 @@ class AngrSim:
                 continue
 
             # Skip the callees since we already tested them
-            assert isinstance(dv.control, ControlStatePlugin)
-            dv.control.no_callees = True
-            dv.control.max_depth = self.callstack_depth(dv)
-            dv.control.backtracking = True
-            dv.control.stop_depth = errorcode_callstack_depth
+            control = self.get_control(dv)
+            control.no_callees = True
+            control.max_depth = self.callstack_depth(dv)
+            control.backtracking = True
+            control.stop_depth = errorcode_callstack_depth
 
             for stash in ['deadended', 'active', 'unconstrained', 'unsat', 'active', 'errored']:
                 self.simgr.drop(stash = stash)
