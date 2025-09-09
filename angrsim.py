@@ -95,11 +95,61 @@ class AngrSim:
 
     @property
     def active_states(self) -> List[SimState]:
-        """Get the active states from the simulation manager."""
+        """Get the active states from the simulation manager.
+        
+        Uses angr's built-in 'active' attribute which is a list of states.
+        """
         if self.simgr is None:
             return []
-        # Access the active stash which is a list of states
-        return self.simgr.active  # type: ignore[attr-defined]
+        return self.simgr.active  # type: ignore[attr-defined,return-value]
+    
+    def remove_active_state(self, state: SimState) -> None:
+        """Remove a state from the active stash."""
+        if self.simgr is not None:
+            self.simgr.active.remove(state)  # type: ignore[attr-defined]
+    
+    def extend_active_states(self, states: List[SimState]) -> None:
+        """Add multiple states to the active stash."""
+        if self.simgr is not None:
+            self.simgr.active.extend(states)  # type: ignore[attr-defined]
+    
+    @property
+    def deadended_states(self) -> List[SimState]:
+        """Get the deadended states from the simulation manager.
+        
+        Uses angr's built-in 'deadended' attribute which is a list of states.
+        """
+        if self.simgr is None:
+            return []
+        return self.simgr.deadended  # type: ignore[attr-defined,return-value]
+    
+    @property
+    def one_active(self) -> Optional[SimState]:
+        """Get the single active state if there's exactly one, else None.
+        
+        Uses angr's built-in 'one_active' property.
+        """
+        if self.simgr is None:
+            return None
+        return self.simgr.one_active  # type: ignore[attr-defined,return-value]
+    
+    def move_states(self, from_stash: str, to_stash: str, 
+                    filter_func: Optional[Callable[[SimState], bool]] = None) -> None:
+        """Move states between stashes with optional filter."""
+        if self.simgr is not None:
+            self.simgr.move(from_stash, to_stash, filter_func)  # type: ignore[attr-defined]
+    
+    def drop_stash(self, stash: str, 
+                   filter_func: Optional[Callable[[SimState], bool]] = None) -> None:
+        """Drop states from a stash with optional filter."""
+        if self.simgr is not None:
+            self.simgr.drop(stash=stash, filter_func=filter_func)  # type: ignore[attr-defined]
+    
+    def get_stash(self, name: str) -> List[SimState]:
+        """Get states from a named stash."""
+        if self.simgr is None or self.simgr.stashes is None:  # type: ignore[attr-defined]
+            return []
+        return self.simgr.stashes.get(name, [])  # type: ignore[attr-defined]
 
     @staticmethod
     def callstack_depth(s: SimState) -> int:
@@ -340,9 +390,9 @@ class AngrSim:
         self.move_to_diverged()
    
     def move_to_diverged(self) -> None:
-        self.simgr.drop(stash='active',
-                        filter_func=lambda s:s.control.diverged and self.is_ignored_function_on_stack(s))
-        self.simgr.move('active', 'diverged', lambda x:x.control.diverged)
+        self.drop_stash('active',
+                        filter_func=lambda s: s.control.diverged and self.is_ignored_function_on_stack(s))
+        self.move_states('active', 'diverged', lambda x: x.control.diverged)
 
     def handle_predicated_mov(self) -> None:
         cmov_states = [s for s in self.active_states
@@ -357,8 +407,8 @@ class AngrSim:
             if matched_entry:
                 s.control.next_branch()
             successors = arch.predicated_mov_constraint(s, taken_predicated_mov, insn)
-            self.simgr.active.remove(s)
-            self.simgr.active.extend(successors)
+            self.remove_active_state(s)
+            self.extend_active_states(successors)
 
     def handle_simulation_timeout(self, step_time: float) -> bool:
         # Occassionally we can get unreasonably long simulation time. If we
