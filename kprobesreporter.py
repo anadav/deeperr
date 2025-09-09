@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: BSD-2-Clause
 from typing import Dict, Iterable, List, Optional, Set, Any
 
-from cle.backends import Symbol
+from cle.backends.symbol import Symbol
 from prmsg import Pbar, warn_once, pr_msg
 from arch import arch
 from reporter import Reporter
 
 class KprobesReporter(Reporter):
-    def report(self):
+    def report(self) -> None:
         for failure in self.failures:
             trace = self.traces[failure['trace_id']]
             sim_syms = [self.angr_mgr.get_sym(s) for s in failure['sim_syms']]
@@ -21,7 +21,7 @@ class KprobesReporter(Reporter):
 
     # Converting ftrace to branches format that is common to processor trace
     # and ftrace.
-    def ftrace_to_branch(self, trace:List[Dict[str, Any]], filter_pid:int, sim_syms:Set[Symbol]) -> List[Dict]:
+    def ftrace_to_branch(self, trace: List[Dict[str, Any]], filter_pid: int, sim_syms: Set[Symbol]) -> List[Dict[str, Any]]:
         branches = []
         first = True
         insn = None
