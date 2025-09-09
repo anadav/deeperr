@@ -261,7 +261,7 @@ class Angr:
 
     def __is_hooked_sym_in_set(self, thing: Any, syms: Set[Symbol]) -> bool:
         ip = self.thing_to_address(thing)
-        if not self.proj.is_hooked(ip):
+        if ip is None or not self.proj.is_hooked(ip):
             return False
         sym = self.get_sym(ip)
         return sym in syms
