@@ -28,7 +28,7 @@ Feel free to integrate this snippet into your documentation where it fits best.
 1. Install `binutils` and `bcc`, which are required for
    tracing and analysis.
    ```bash
-   sudo apt install binutils libcapstone3 bpfcc-tools python3-bpfcc
+   sudo apt install binutils bpfcc-tools python3-bpfcc
 
    # perf is only needed for recording traces using Intel PT. If you are using a
    # custom kernel, do not install linus-tools-`uname -r` since it would fail.
