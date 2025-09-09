@@ -3,17 +3,17 @@
 import capstone
 from typing import Any, Dict, Tuple, List, Optional, Set, Iterable, Callable, Union
 import angr
+from angr.sim_state import SimState
 import claripy
 import copy
 import struct
 
-from cle.backends import Symbol
-from abc import ABC, abstractmethod
+from cle.backends.symbol import Symbol
 from abstractarch import Arch, ControlStatePluginArch
 
 
 class ControlStatePluginX86(ControlStatePluginArch):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.eflags_if = True
 
@@ -183,7 +183,7 @@ class ArchX86(Arch):
 
     # Returns two states following a cmov constraint. The first is the one that
     # actually took place, and the second one is the one was not followed.
-    def predicated_mov_constraint(self, state:angr.SimState, cond_true:bool, insn:capstone.CsInsn) -> List[angr.SimState]:
+    def predicated_mov_constraint(self, state: 'SimState', cond_true: bool, insn: capstone.CsInsn) -> List['SimState']:
 
         def ffs(x:int) -> int:
             """Returns the index, counting from 0, of the
@@ -203,7 +203,10 @@ class ArchX86(Arch):
         simple_mask, simple_mask_clear, single_bit_cond = None, False, False
         if id in self.flags_cond_map:
             mask, invert = self.flags_cond_map[id]
-            constraint = (flags & mask) != 0
+            if flags is not None:
+                constraint = (flags & mask) != 0
+            else:
+                constraint = claripy.false()
             if invert:
                 constraint = claripy.Not(constraint)#) if cond[1] else flags & cond[0]
             single_bit_cond = (mask & (mask - 1)) == 0
@@ -211,11 +214,17 @@ class ArchX86(Arch):
         elif id == capstone.x86.X86_INS_JGE:
             constraint = flags_equal(flags, self.X86_EFLAGS_SF, self.X86_EFLAGS_OF)
         elif id == capstone.x86.X86_INS_JG:
+            if flags is not None:
                 constraint = claripy.And((flags & self.X86_EFLAGS_ZF) == 0,
                         flags_equal(flags, self.X86_EFLAGS_SF, self.X86_EFLAGS_OF))
+            else:
+                constraint = claripy.false()
         elif id == capstone.x86.X86_INS_JLE:
-            constraint = claripy.Or((flags & self.X86_EFLAGS_ZF) != 0,
-                    claripy.Not(flags_equal(flags, self.X86_EFLAGS_SF, self.X86_EFLAGS_OF)))
+            if flags is not None:
+                constraint = claripy.Or((flags & self.X86_EFLAGS_ZF) != 0,
+                        claripy.Not(flags_equal(flags, self.X86_EFLAGS_SF, self.X86_EFLAGS_OF)))
+            else:
+                constraint = claripy.false()
         elif id == capstone.x86.X86_INS_JL:
             constraint = flags_equal(flags, self.X86_EFLAGS_SF, self.X86_EFLAGS_OF)
         else:
@@ -229,12 +238,14 @@ class ArchX86(Arch):
             if simple_mask is not None:
                 # if they are not equal, the bit is cleared
                 if sim_cond_true == simple_mask_clear:
-                    n.regs.flags = flags & ~simple_mask
+                    if flags is not None:
+                        n.regs.eflags = flags & ~simple_mask
                 elif single_bit_cond:
-                    n.regs.flags = flags | simple_mask
+                    if flags is not None:
+                        n.regs.eflags = flags | simple_mask
 
-            n.control.diverged = cond_true != sim_cond_true
-            n.control.expected_ip = state.solver.eval_one(state.addr)
+            n.control.diverged = cond_true != sim_cond_true  # type: ignore[attr-defined]
+            n.control.expected_ip = state.solver.eval_one(state.addr)  # type: ignore[attr-defined]
 
             successors.append(n)
 
@@ -314,37 +325,37 @@ class ArchX86(Arch):
         assert(insn.id == capstone.x86.X86_INS_LOOP)
         return True
 
-    def is_predicated_mov(self, insn) -> bool:
+    def is_predicated_mov(self, insn: capstone.CsInsn) -> bool:
         # cannot just check the group, since SETxx does not have a group
         return insn.id in self.predicated_map
 
-    def is_rep_insn(self, insn) -> bool:
+    def is_rep_insn(self, insn: capstone.CsInsn) -> bool:
         return (not {capstone.x86.X86_PREFIX_REP, capstone.x86.X86_PREFIX_REPE, 
                  capstone.x86.X86_PREFIX_REPNE}.isdisjoint(insn.prefix))
 
-    def is_fixed_rep_insn(self, insn) -> bool:
+    def is_fixed_rep_insn(self, insn: capstone.CsInsn) -> bool:
         return (insn.mnemonic.startswith("rep m") or
                insn.mnemonic.startswith("rep s"))
 
-    def is_branch_insn(self, insn) -> bool:
+    def is_branch_insn(self, insn: capstone.CsInsn) -> bool:
             return ((not {capstone.CS_GRP_CALL, capstone.CS_GRP_RET,
                  capstone.CS_GRP_JUMP}.isdisjoint(insn.groups)) or
                  self.is_rep_insn(insn) or self.is_loop_insn(insn))
 
-    def is_jmp_insn(self, insn) -> bool:
+    def is_jmp_insn(self, insn: capstone.CsInsn) -> bool:
         return capstone.x86.X86_GRP_JUMP in insn.groups
 
-    def is_indirect_jmp_insn(self, insn) -> bool:
+    def is_indirect_jmp_insn(self, insn: capstone.CsInsn) -> bool:
         return (self.is_jmp_insn(insn) and
                 insn.id in {capstone.x86.X86_INS_LJMP,
                             capstone.x86.X86_INS_JMP} and
                 insn.operands[0].type != capstone.x86.X86_OP_IMM)
 
-    def is_indirect_branch_target(self, insn) -> bool:
+    def is_indirect_branch_target(self, insn: capstone.CsInsn) -> bool:
         return insn.id in {capstone.x86.X86_INS_ENDBR32,
                            capstone.x86.X86_INS_ENDBR64}
 
-    def is_indirect_branch_insn(self, insn) -> bool:
+    def is_indirect_branch_insn(self, insn: capstone.CsInsn) -> bool:
         return (self.is_indirect_jmp_insn(insn) or
                 self.is_indirect_call_insn(insn))
 
@@ -379,11 +390,23 @@ class ArchX86(Arch):
         return (self.is_cond_jmp_insn(insn) or self.is_rep_insn(insn) or
                 self.is_loop_insn(insn))
 
-    def is_direct_call_insn(self, insn:capstone.CsInsn) -> bool:
+    def is_direct_call_insn(self, insn: capstone.CsInsn) -> bool:
         return (self.is_call_insn(insn) and
+                len(insn.operands) > 0 and
                 insn.operands[0].type == capstone.x86.X86_OP_IMM)
     
-    def is_direct_branch_insn(self, insn:capstone.CsInsn) -> bool:
+    def is_direct_jmp_insn(self, insn: capstone.CsInsn) -> bool:
+        return (self.is_jmp_insn(insn) and
+                insn.id in {capstone.x86.X86_INS_JMP, capstone.x86.X86_INS_LJMP} and
+                len(insn.operands) > 0 and
+                insn.operands[0].type == capstone.x86.X86_OP_IMM)
+    
+    def is_indirect_call_insn(self, insn: capstone.CsInsn) -> bool:
+        return (self.is_call_insn(insn) and
+                len(insn.operands) > 0 and
+                insn.operands[0].type != capstone.x86.X86_OP_IMM)
+    
+    def is_direct_branch_insn(self, insn: capstone.CsInsn) -> bool:
         return self.is_direct_jmp_insn(insn) or self.is_direct_call_insn(insn)
 
     def get_direct_branch_target(self, insn:capstone.CsInsn) -> int:
@@ -392,75 +415,90 @@ class ArchX86(Arch):
         return int(insn.op_str, 16)
 
     @staticmethod
-    def get_control_state_arch(state:angr.SimState) -> 'ControlStatePluginX86':
+    def get_control_state_arch(state: 'SimState') -> 'ControlStatePluginX86':
         # To avoid circular import, we could have used lazy import
         return state.control.arch # type: ignore
 
     @staticmethod
-    def sti_hook(state:angr.SimState):
+    def sti_hook(state: 'SimState') -> None:
         archX86 = ArchX86.get_control_state_arch(state)
         archX86.eflags_if = True
 
     @staticmethod
-    def cli_hook(state:angr.SimState):
+    def cli_hook(state: 'SimState') -> None:
         archX86 = ArchX86.get_control_state_arch(state)
         archX86.eflags_if = False
 
     @staticmethod
-    def __popf_hook(state:angr.SimState, reg:str):
+    def __popf_hook(state: 'SimState', reg: str) -> None:
         archX86 = ArchX86.get_control_state_arch(state)
         rsp = state.registers.load('rsp')
         v = state.memory.load(rsp, size=8, endness='Iend_LE')
         state.registers.store(reg, v)
-        archX86.eflags_if = (v & arch.X86_EFLAGS_IF) != 0
-        rsp += ArchX86.STACK_SIZE
+        if v is not None:
+            archX86.eflags_if = (v & ArchX86.X86_EFLAGS_IF) != 0
+        else:
+            archX86.eflags_if = False
+        if rsp is not None:
+            rsp += ArchX86.STACK_SIZE
+        else:
+            rsp = ArchX86.STACK_SIZE
         state.registers.store('rsp', rsp)
 
     @staticmethod
-    def popf_hook(state:angr.SimState):
+    def popf_hook(state: 'SimState') -> None:
         ArchX86.__popf_hook(state, "flags")
     
     @staticmethod
-    def popfd_hook(state:angr.SimState):
+    def popfd_hook(state: 'SimState') -> None:
         ArchX86.__popf_hook(state, "eflags")
          
     @staticmethod
-    def popfq_hook(state:angr.SimState):
+    def popfq_hook(state: 'SimState') -> None:
         ArchX86.__popf_hook(state, "rflags")
 
     @staticmethod
-    def __pushf_hook(state:angr.SimState, reg:str):
+    def __pushf_hook(state: 'SimState', reg: str) -> None:
         archX86 = ArchX86.get_control_state_arch(state)
         rsp = state.registers.load('rsp')
-        rsp -= ArchX86.STACK_SIZE
+        if rsp is not None:
+            rsp -= ArchX86.STACK_SIZE
+        else:
+            rsp = -ArchX86.STACK_SIZE
         v = state.registers.load(reg)
         if archX86.eflags_if:
-            v |= arch.X86_EFLAGS_IF
+            if v is not None:
+                v |= ArchX86.X86_EFLAGS_IF
+            else:
+                v = ArchX86.X86_EFLAGS_IF
 
         state.memory.store(rsp, v, size=8, endness='Iend_LE')
         state.registers.store('rsp', rsp)
 
     @staticmethod
-    def pushf_hook(state:angr.SimState):
+    def pushf_hook(state: 'SimState') -> None:
         ArchX86.__pushf_hook(state, "flags")
     
     @staticmethod
-    def pushfd_hook(state:angr.SimState):
+    def pushfd_hook(state: 'SimState') -> None:
         ArchX86.__pushf_hook(state, "eflags")
          
     @staticmethod
-    def pushfq_hook(state:angr.SimState):
+    def pushfq_hook(state: 'SimState') -> None:
         ArchX86.__pushf_hook(state, "rflags")
 
     @staticmethod
-    def skip_mask_hook(state:angr.SimState):
+    def skip_mask_hook(state: 'SimState') -> None:
         #insn = angr_mgr.state_insn(state)
         insn = state.control.angr_mgr.state_insn(state) # type: ignore
 
         for reg in insn.regs_write:
-            reg_name = arch.cs_to_pyvex_reg(reg)
+            reg_name = ArchX86().cs_to_pyvex_reg(reg)
             val = state.registers.load(reg_name)
-            v = state.solver.Unconstrained("unconstrained_val", val.length)
+            if val is not None:
+                v = state.solver.Unconstrained("unconstrained_val", val.length)
+            else:
+                v = state.solver.Unconstrained("unconstrained_val", 64)
             # TODO: find width and create correct value
             state.registers.store(reg_name, v)
 
@@ -572,11 +610,11 @@ class ArchX86(Arch):
 
             if proj.arch.bits == 32:
                 # 32-bit IDT entry format: https://wiki.osdev.org/Interrupt_Descriptor_Table#Structure_IA-32
-                offset_low, selector, _zero, access, offset_high = struct.unpack('<HHBHB', entry_data)
+                offset_low, _selector, _zero, access, offset_high = struct.unpack('<HHBHB', entry_data)
                 handler_addr = (offset_high << 16) | offset_low
             else:
                 # 64-bit IDT entry format: https://wiki.osdev.org/Interrupt_Descriptor_Table#Structure_AMD64
-                offset_low, selector, ist, access, offset_middle, offset_high = struct.unpack('<HHBBHI', entry_data[0:12])
+                offset_low, _selector, _ist, access, offset_middle, offset_high = struct.unpack('<HHBBHI', entry_data[0:12])
                 handler_addr = (offset_high << 32) | (offset_middle << 16) | offset_low
 
             # Check if the entry is present (access & 0x80)
