@@ -61,7 +61,7 @@ class AngrSim:
         assert isinstance(branches[-1]['to_ip'], int)
         assert isinstance(branches[0]['from_ip'], int)
 
-        self.simgr: SimulationManager = None  # type: ignore[assignment]
+        self.simgr: Optional[SimulationManager] = None
         self.angr: angr.Project
         self.has_calls = has_calls
         self.sim_syms: Optional[Set[Symbol]] = sim_syms
@@ -92,6 +92,14 @@ class AngrSim:
                                     save_unsat = True,
                                     hierarchy = False,
                                     save_unconstrained = True)
+
+    @property
+    def active_states(self) -> List[SimState]:
+        """Get the active states from the simulation manager."""
+        if self.simgr is None:
+            return []
+        # Access the active stash which is a list of states
+        return self.simgr.active  # type: ignore[attr-defined]
 
     @staticmethod
     def callstack_depth(s: SimState) -> int:
@@ -276,12 +284,12 @@ class AngrSim:
 
 
     def prepare_hooks(self) -> None:
-        for s in self.simgr.active:
+        for s in self.active_states:
             ip = Angr.state_ip(s)
             self.angr_mgr.prepare_code_hooks(ip)
 
     def prepare_simulation_step(self) -> None:
-        for s in self.simgr.active:  # type: ignore[union-attr]
+        for s in self.active_states:
             control = cast(ControlStatePlugin, s.control)  # type: ignore[attr-defined]
             control.diverged = False
             control.expected_ip = None
@@ -295,7 +303,7 @@ class AngrSim:
             br = control.current_branch
             return br is not None and br.get('exception', False) and br['from_ip'] == Angr.state_ip(s)
 
-        if not any(is_exception(s) for s in self.simgr.active):
+        if not any(is_exception(s) for s in self.active_states):
             return
         
         def get_exception_successors(s: SimState) -> angr.engines.successors.SimSuccessors:
@@ -337,7 +345,7 @@ class AngrSim:
         self.simgr.move('active', 'diverged', lambda x:x.control.diverged)
 
     def handle_predicated_mov(self) -> None:
-        cmov_states = [s for s in self.simgr.active  # type: ignore[union-attr]
+        cmov_states = [s for s in self.active_states
                         if s.control.detailed_trace and self.angr_mgr.is_predicated_mov(s)]  # type: ignore[attr-defined]
 
         for s in cmov_states:
@@ -371,7 +379,7 @@ class AngrSim:
         return True
 
     def constrain_calls(self) -> None:
-        for s in self.simgr.active:  # type: ignore[union-attr]
+        for s in self.active_states:
             insn = self.angr_mgr.get_insn(s)
             if insn is None:
                 continue
@@ -638,7 +646,10 @@ class AngrSim:
         
         self.simgr.populate('diverged', list())
 
-        c = self.simgr.active[0].control
+        active = self.active_states
+        if not active:
+            raise RuntimeError("No active states in simulation manager")
+        c = active[0].control
         trace_length = len(c.branches) - 1
         c.no_callees = False
         c.only_symbols = self.sim_syms
@@ -647,9 +658,9 @@ class AngrSim:
         msg = "simulating"
         pbar = Pbar(msg, total=trace_length, unit="branch")
 
-        while len(self.simgr.deadended) == 0 and len(self.simgr.active) != 0:
+        while len(self.simgr.deadended) == 0 and len(self.active_states) != 0:
             # All states should have the same instruction pointer
-            pbar.update_to(self.simgr.active[0].control.done_branches)
+            pbar.update_to(self.active_states[0].control.done_branches)
 
             self.prepare_simulation_step()
             self.handle_exception()
@@ -665,7 +676,7 @@ class AngrSim:
             # Handle early divergance (predicated-mov)
             self.move_to_diverged()
 
-            for s in self.simgr.active:
+            for s in self.active_states:
                 insn = s.control.last_insn
                 if insn is None:
                     continue
@@ -677,7 +688,7 @@ class AngrSim:
             self.simgr.move('active', 'deadended',
                             lambda x:len(x.control.branches) == 0 or self.is_ret_failure(x))
 
-            if len(self.simgr.deadended) == 0 and len(self.simgr.active) == 0:
+            if len(self.simgr.deadended) == 0 and len(self.active_states) == 0:
                 pbar.set_description_str(f'{msg} (diverged)')
                 self.handle_divergence(res)
 
