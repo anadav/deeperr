@@ -646,7 +646,7 @@ class Angr:
         except ValueError:
             sym = None
 
-        disasm_sym_cache = sym and self.disasm_sym(sym)
+        disasm_sym_cache = self.disasm_sym(sym) if sym else None
         if disasm_sym_cache is None:
             if ip is None:
                 return None
