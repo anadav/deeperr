@@ -218,8 +218,8 @@ class AngrSim:
         except ValueError:
             return True
 
-        # TODO: Move this to arch
-        if sym is not None and sym.name == '__x86_indirect_thunk_array':
+        # Check for architecture-specific symbols that shouldn't be skipped
+        if sym is not None and arch.is_arch_specific_skipped_sym(sym.name):
             return False
 
         # _copy_to_user is now properly handled via CopyProcedure hook in angrmgr.py

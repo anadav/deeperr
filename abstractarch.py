@@ -260,3 +260,14 @@ class Arch(ABC):
     def pointer_size(self) -> int:
         """Size of a pointer in bytes"""
         pass
+    
+    def is_arch_specific_skipped_sym(self, sym_name: Optional[str]) -> bool:
+        """Check if a symbol should be skipped based on architecture-specific rules.
+        
+        Args:
+            sym_name: The symbol name to check (can be None)
+            
+        Returns:
+            True if this symbol should be skipped for architecture-specific reasons
+        """
+        return False

@@ -673,5 +673,21 @@ class ArchX86(Arch):
     @property
     def address_width(self) -> int:
         return 64
+    
+    def is_arch_specific_skipped_sym(self, sym_name: Optional[str]) -> bool:
+        """Check if a symbol should be skipped based on x86-specific rules.
+        
+        Args:
+            sym_name: The symbol name to check (can be None)
+            
+        Returns:
+            True if this symbol should be skipped for x86-specific reasons
+        """
+        if sym_name is None:
+            return False
+        
+        # x86-specific symbols that should be handled specially
+        # __x86_indirect_thunk_array is used for retpoline mitigation
+        return sym_name == '__x86_indirect_thunk_array'
 
 arch = ArchX86()
