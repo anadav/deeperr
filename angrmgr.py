@@ -1,6 +1,6 @@
 # Copyright 2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
-from typing import Any, Dict, Tuple, List, Optional, Set, Iterable, Callable, Union
+from typing import Any, Dict, Tuple, List, Optional, Set, Iterable, Callable, Union, cast
 from collections import defaultdict
 import os
 import sys
@@ -8,8 +8,10 @@ import bisect
 import io
 
 import angr
+from angr.sim_state import SimState
+from angr.sim_procedures import SimProcedure
 import capstone
-from cle.backends import Symbol
+from cle.backends.symbol import Symbol
 from arch import arch
 from kallsyms import Kallsyms
 from kcore import Kcore
@@ -17,7 +19,7 @@ from ftrace import Ftrace
 from prmsg import pr_msg, Pbar
 from simprocedures import CopyProcedure, RetpolineProcedure, ReturnProcedure, ProcedureWrapper, RepHook
 
-userspace_copy_funcs:Set[str] = {
+userspace_copy_funcs: Set[str] = {
 #    'copy_user_enhanced_fast_string',
 #    'copy_user_generic_string',
 #    'copy_user_generic_unrolled',
@@ -47,7 +49,7 @@ ignore_funcs_nopure = {
 # Returns the number of uncopied bytes unlike memcpy
 
 class DisassemblyError(Exception):
-    def __init__(self, msg:str):
+    def __init__(self, msg: str) -> None:
         self.msg = msg
 
 class Angr:
@@ -55,9 +57,9 @@ class Angr:
     step_func_proc_trace = angr.SIM_PROCEDURES['stubs']['ReturnUnconstrained']()
 
     def __init__(self,
-                 kallsyms:'Kallsyms',
-                 kcore:Optional['Kcore'],
-                 saved_segs:Optional[List]):
+                 kallsyms: 'Kallsyms',
+                 kcore: Optional['Kcore'],
+                 saved_segs: Optional[List[Dict[str, Any]]]) -> None:
         global arch
 
         self.proj: angr.Project
@@ -106,7 +108,7 @@ class Angr:
 
         self.ignore_sym_names = ignore_funcs_pure|ignore_funcs_nopure
 
-    def read_ignored_funcs(self):
+    def read_ignored_funcs(self) -> None:
         script_path = os.path.abspath(__file__)
         script_dir = os.path.dirname(script_path)
         try:
@@ -134,7 +136,7 @@ class Angr:
                     })
         return code
 
-    def load(self, kallsyms:Kallsyms, kcore:Optional[Kcore], saved_segs:Optional[List[Dict[str, Union[int, bytes]]]]):
+    def load(self, kallsyms: Kallsyms, kcore: Optional[Kcore], saved_segs: Optional[List[Dict[str, Union[int, bytes]]]]) -> None:
         first = True
         f:io.IOBase
             
@@ -210,7 +212,7 @@ class Angr:
 
         f.close()
 
-    def remove_unsupported_pyvex_insn_one_sym(self, sym:Symbol):
+    def remove_unsupported_pyvex_insn_one_sym(self, sym: Symbol) -> bool:
         if sym in self.removed_unsupported_insn_syms:
             return False
         if sym.size is None:
@@ -234,28 +236,29 @@ class Angr:
                 self.proj.hook(insn.address, hook, length=insn.size, replace=True)
 
         self.removed_unsupported_insn_syms.add(sym)
+        return True
     
-    def remove_unsupported_pyvex_insn(self, syms:Iterable[Symbol]):
+    def remove_unsupported_pyvex_insn(self, syms: Iterable[Symbol]) -> None:
         for s in syms:
             self.remove_unsupported_pyvex_insn_one_sym(s)
 
-    def __is_hooked_sym_in_set(self, thing, syms:Set[Symbol]):
+    def __is_hooked_sym_in_set(self, thing: Any, syms: Set[Symbol]) -> bool:
         ip = self.thing_to_address(thing)
         if not self.proj.is_hooked(ip):
             return False
         sym = self.get_sym(ip)
         return sym in syms
 
-    def is_skipped_sym(self, thing) -> bool:
+    def is_skipped_sym(self, thing: Any) -> bool:
         return self.__is_hooked_sym_in_set(thing, self.skipped_hooked_procedure)
     
-    def is_fastpath_to_out(self, thing) -> bool:
+    def is_fastpath_to_out(self, thing: Any) -> bool:
         return self.__is_hooked_sym_in_set(thing, self.fastpath_to_out_hooked_procedures)
 
-    def is_fastpath_to_ret(self, thing) -> bool:
+    def is_fastpath_to_ret(self, thing: Any) -> bool:
         return self.__is_hooked_sym_in_set(thing, self.fastpath_to_ret_hooked_procedures)
 
-    def is_predicated_mov(self, s:angr.SimState) -> bool:
+    def is_predicated_mov(self, s: SimState) -> bool:
         insn = self.state_insn(s)
         return insn is not None and arch.is_predicated_mov(insn)
 
@@ -275,7 +278,7 @@ class Angr:
             return True
         return False
 
-    def for_each_insn_in_sym(self, sym:Symbol, fn:Callable, **kwargs):
+    def for_each_insn_in_sym(self, sym: Symbol, fn: Callable[..., None], **kwargs) -> None:
         if sym.size is None or sym.size == 0:
             return
         if not self.disasm_sym(sym):
@@ -290,7 +293,7 @@ class Angr:
         for insn in insns:
             fn(sym, insn, **kwargs)
 
-    def analyze_untracked_ftrace_callees(self, sym:Symbol) -> Set[Symbol]:
+    def analyze_untracked_ftrace_callees(self, sym: Symbol) -> Set[Symbol]:
         def collect(sym: Symbol, insn:capstone.CsInsn, untrackable:Set[Symbol]):
             if not arch.is_direct_call_insn(insn):
                 return
@@ -305,7 +308,7 @@ class Angr:
 
     # The instructions that need to be probed per symbol without those
     # of related symbols (e.g., cold)
-    def analyze_jmp_traget_syms(self, sym):
+    def analyze_jmp_traget_syms(self, sym: Symbol) -> Set[Symbol]:
         def collect(sym: Symbol, insn:capstone.CsInsn, br_tgts:Set[Symbol]):
             if arch.is_direct_jmp_insn(insn):
                 tgt_addr = arch.get_direct_branch_target(insn)
@@ -322,7 +325,7 @@ class Angr:
         return self.analyzes[sym]['branch targets']
 
     # Returns ([probe insns], [reachable symbols], [complete])
-    def process_reachable_syms(self, syms:Iterable[Symbol]) -> Set[Symbol]:
+    def process_reachable_syms(self, syms: Iterable[Symbol]) -> Set[Symbol]:
         processed_syms:Set[Symbol] = set()
         to_process_syms = set(syms)
 
@@ -344,18 +347,21 @@ class Angr:
         return processed_syms
 
     @staticmethod
-    def state_ip(s:angr.SimState) -> Optional[int]:
+    def state_ip(s: SimState) -> Optional[int]:
         v = s.registers.load(arch.ip_reg_name)
         try:
             return s.solver.eval_one(v)
         except angr.SimValueError:
             return None
     
-    def state_insn(self, s:angr.SimState) -> capstone.CsInsn:
-        ip = s.solver.eval_one(s.regs.rip)
-        return self.get_insn(ip)
+    def state_insn(self, s: SimState) -> Optional[capstone.CsInsn]:
+        try:
+            ip = s.solver.eval_one(s.regs.rip)
+            return self.get_insn(ip)
+        except (angr.SimValueError, ValueError):
+            return None
 
-    def init_general_hooks(self):
+    def init_general_hooks(self) -> None:
         for sym_name in ignore_funcs_pure:
             try:
                 sym = self.get_sym(sym_name)
@@ -366,7 +372,7 @@ class Angr:
 
         self.code_hooks_done = set()
 
-    def init_copy_hooks(self):
+    def init_copy_hooks(self) -> None:
         dict_sym_libc_hook = [(f, f) for f in direct_sym_libc_hooks]
 
         dict_sym_libc_hook.extend(
@@ -394,7 +400,7 @@ class Angr:
             except ValueError:
                 continue
 
-    def init_retpoline(self):
+    def init_retpoline(self) -> None:
         for reg in arch.retpoline_thunk_regs:
             try:
                 self.hook_sym('__x86_indirect_thunk_'+reg,
@@ -403,7 +409,7 @@ class Angr:
             except ValueError:
                 pass
 
-    def init_untrain_ret(self):
+    def init_untrain_ret(self) -> None:
         for sym_name in ['zen_untrain_ret', '__x86_return_thunk']:
             try:
                 self.hook_sym(sym_name,
@@ -412,20 +418,19 @@ class Angr:
             except ValueError:
                 pass
 
-    def after_last_branch_addr(self, s:angr.SimState) -> int:
+    def after_last_branch_addr(self, s: SimState) -> int:
         js = s.history.jump_source
         insns = s.history.parent.state.block().disassembly.insns
         src_insn = [insn for insn in insns if insn.address == js][0]
         return src_insn.address + src_insn.size
 
-    def remapped_address_to_rebased(self, remapped_addr:int) -> int:
+    def remapped_address_to_rebased(self, remapped_addr: int) -> Optional[int]:
         obj = None
         for loaded_obj in self.proj.loader.all_objects:
             if loaded_obj.contains_addr(remapped_addr):
                 obj = loaded_obj
                 break
 
-        assert(obj is not None)
         if obj is None:
             return None
         # TODO: return None instead of asserting
@@ -436,8 +441,8 @@ class Angr:
 
     def get_sym(self,
                 thing: Union[str, int, capstone.CsInsn, Symbol],
-                exact:bool = False, hint:Optional[Symbol] = None,
-                no_zero_size:bool = True) -> Symbol:
+                exact: bool = False, hint: Optional[Symbol] = None,
+                no_zero_size: bool = True) -> Optional[Symbol]:
         sym = None
         if hint is None:
             hint = self.sym_hint
@@ -456,7 +461,7 @@ class Angr:
         # TODO: get rid of remapped_addr 
         remapped_addr = addr
         if remapped_addr is None:
-            return None
+            return None  # type: ignore[unreachable]
             
         def sym_matches(sym: Symbol, addr: int, exact:bool) -> bool:
             if no_zero_size and sym.size is None:
@@ -504,36 +509,36 @@ class Angr:
         base_addr = addr - cle.mapped_base + cle.linked_base
         return cle.binary, base_addr
 
-    def get_sym_addr(self, thing, exact:bool = False) -> Optional[int]:
+    def get_sym_addr(self, thing: Any, exact: bool = False) -> Optional[int]:
         sym = self.get_sym(thing, exact)
         return None if sym is None else int(sym.rebased_addr)
 
-    def get_sym_name(self, thing, exact:bool = False) -> str:
+    def get_sym_name(self, thing: Any, exact: bool = False) -> str:
         sym = self.get_sym(thing, exact)
         return "[unknown]" if not sym else sym.name
 
-    def next_insn(self, insn:capstone.CsInsn) -> Optional[capstone.CsInsn]:
+    def next_insn(self, insn: capstone.CsInsn) -> Optional[capstone.CsInsn]:
         next_insn_addr = self.next_insn_addr(insn)
         return self.get_insn(next_insn_addr)
 
-    def next_insn_addr(self, thing) -> Optional[int]:
+    def next_insn_addr(self, thing: Any) -> Optional[int]:
         insn = self.get_insn(thing)
         return insn and insn.address + insn.size
     
     def thing_to_address(self,
-                         thing:Union[int, capstone.CsInsn, Symbol, angr.SimState]) -> int:
+                         thing: Union[int, capstone.CsInsn, Symbol, SimState]) -> Optional[int]:
         if isinstance(thing, int):
             return thing
         if isinstance(thing, capstone.CsInsn):
             return thing.address
         if isinstance(thing, Symbol):
             return thing.rebased_addr
-        if isinstance(thing, angr.SimState):
-            return thing.addr
-        raise TypeError("Invalid thing type")
+        if isinstance(thing, SimState):
+            return thing.addr  # type: ignore[attr-defined]
+        return None
     
     def thing_to_insn(self,
-                      thing:Union[int, capstone.CsInsn, Symbol, angr.SimState]) -> capstone.CsInsn:
+                      thing: Union[int, capstone.CsInsn, Symbol, SimState]) -> Optional[capstone.CsInsn]:
         assert not isinstance(thing, int)
 
         if isinstance(thing, capstone.CsInsn):
@@ -542,12 +547,12 @@ class Angr:
         addr = self.thing_to_address(thing)
         return self.get_insn(addr)
          
-    def get_prev_insn(self, thing:int, sym:Optional[Symbol]=None) -> capstone.CsInsn:
+    def get_prev_insn(self, thing: int, sym: Optional[Symbol] = None) -> Optional[capstone.CsInsn]:
         # Use capstone, since pyvex does not know too many instructions
         addr = self.thing_to_address(thing)
         return self.get_insn(addr-1, sym, exact=False)
 
-    def prev_insn_addr(self, addr:int) -> Optional[int]:
+    def prev_insn_addr(self, addr: int) -> Optional[int]:
         insn = self.get_prev_insn(addr)
         return insn and insn.address
     
@@ -564,7 +569,7 @@ class Angr:
         self.disasm_one_cache[addr] = insn
         return insn
 
-    def disasm_sym(self, sym:Symbol) -> Optional[List[capstone.CsInsn]]:
+    def disasm_sym(self, sym: Symbol) -> Optional[List[capstone.CsInsn]]:
         if sym in self.disasm_sym_cache:
             return self.disasm_sym_cache[sym]
         if sym in self.disasm_failure:
@@ -594,7 +599,7 @@ class Angr:
             self.disasm_sym_cache[sym] = decoded
             return decoded
 
-    def get_insn(self, thing:Any, sym_hint:Optional[Symbol]=None, exact=True) -> capstone.CsInsn:
+    def get_insn(self, thing: Any, sym_hint: Optional[Symbol] = None, exact: bool = True) -> Optional[capstone.CsInsn]:
         """
         Get the instruction from the provided thing (address, capstone.CsInsn, or angr.block.CapstoneInsn).
         
@@ -638,7 +643,7 @@ class Angr:
 
         return disasm_sym_cache[idx - 1]
 
-    def get_branch_target_insn(self, insn:capstone.CsInsn) -> capstone.CsInsn:
+    def get_branch_target_insn(self, insn: capstone.CsInsn) -> Optional[capstone.CsInsn]:
         target_addr = arch.get_direct_branch_target(insn)
         if target_addr is None:
             raise ValueError(f"Instruction {insn.mnemonic} {insn.op_str} does not have a branch target")
@@ -646,15 +651,15 @@ class Angr:
         return self.get_insn(target_addr)
 
     # TODO: Move to arch
-    def is_module_address(self, addr:int) -> bool:
+    def is_module_address(self, addr: int) -> bool:
         return addr >= 0xffffffffa0000000 and addr <= 0xfffffffffeffffff
 
-    def is_ebpf_or_ftrace(self, addr:int) -> bool:
+    def is_ebpf_or_ftrace(self, addr: int) -> bool:
         # Need to read modules memory; for now, assume any address in the modules space
         # is of ebpf or ftrace
         return self.is_module_address(addr)
 
-    def prepare_code_hooks(self, thing:Union[Symbol, set]):
+    def prepare_code_hooks(self, thing: Any) -> None:
         try:
             sym = self.get_sym(thing)
         except ValueError:
@@ -683,10 +688,10 @@ class Angr:
         self.remove_unsupported_pyvex_insn_one_sym(sym)
 
     def hook_sym(self,
-                 thing:Union[Symbol, set],
-                 proc:Optional[angr.SimProcedure],
-                 skip_to_ret:bool,
-                 replace:bool = False):
+                 thing: Any,
+                 proc: Optional[SimProcedure],
+                 skip_to_ret: bool,
+                 replace: bool = False) -> None:
         sym = self.get_sym(thing)
 
         if proc is None:
@@ -702,19 +707,19 @@ class Angr:
                 self.fastpath_to_out_hooked_procedures.add(sym)
             self.proj.hook(hook_addr, proc, sym.size, replace=replace)
 
-    def parse_interrupt_table(self):
+    def parse_interrupt_table(self) -> None:
         interrupt_table = arch.parse_interrupt_table(self.proj)
 
         self.addr_to_vectors = defaultdict(set)
         for vector, addr in interrupt_table.items():
             self.addr_to_vectors[addr].add(vector)
 
-    def is_interrupt_handler_addr(self, thing) -> bool:
+    def is_interrupt_handler_addr(self, thing: Any) -> bool:
         ip = self.thing_to_address(thing)
 
         return ip in self.addr_to_vectors
     
-    def is_exception_addr(self, thing) -> bool:
+    def is_exception_addr(self, thing: Any) -> bool:
         ip = self.thing_to_address(thing)
         if ip not in self.addr_to_vectors:
             return False
@@ -723,20 +728,20 @@ class Angr:
         return any([arch.is_exception_vector(vector) for vector in vectors])
     
     @staticmethod
-    def state_concrete_addr(state:angr.SimState) -> Optional[int]:
+    def state_concrete_addr(state: SimState) -> Optional[int]:
         try:
             return state.solver.eval_one(state.addr)
         except angr.errors.SimValueError:
             return None
 
     @staticmethod        
-    def concrete_reg(s:angr.SimState, reg:str) -> Optional[int]:
+    def concrete_reg(s: SimState, reg: str) -> Optional[int]:
         try:
             return s.reg_concrete(reg)
         except angr.SimValueError:
             return None
 
-    def state_ret_addr(self, s:angr.SimState) -> Optional[int]:
+    def state_ret_addr(self, s: SimState) -> Optional[int]:
         # TODO: use callstack_depth
         if len(s.callstack) - 1 == 0:
             return None
@@ -751,4 +756,4 @@ class Angr:
 
     def return_reg_name(self) -> str:
         cc = self.proj.factory.cc()
-        return cc.RETURN_VAL.reg_name
+        return cc.RETURN_VAL.reg_name  # type: ignore[attr-defined]
