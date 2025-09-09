@@ -1,6 +1,6 @@
 # Copyright 2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
-from typing import Any, Dict, Tuple, List, Optional, Set, Iterable, Callable, Union
+from typing import Any, Dict, Tuple, List, Optional, Set, Iterable, Callable, Union, cast
 import logging
 import time
 import angr
@@ -61,7 +61,7 @@ class AngrSim:
         assert isinstance(branches[-1]['to_ip'], int)
         assert isinstance(branches[0]['from_ip'], int)
 
-        self.simgr: SimulationManager
+        self.simgr: SimulationManager = None  # type: ignore[assignment]
         self.angr: angr.Project
         self.has_calls = has_calls
         self.sim_syms: Optional[Set[Symbol]] = sim_syms
@@ -281,17 +281,19 @@ class AngrSim:
             self.angr_mgr.prepare_code_hooks(ip)
 
     def prepare_simulation_step(self) -> None:
-        for s in self.simgr.active:
-            s.control.diverged = False  # type: ignore[attr-defined]
-            s.control.expected_ip = None  # type: ignore[attr-defined]
+        for s in self.simgr.active:  # type: ignore[union-attr]
+            control = cast(ControlStatePlugin, s.control)  # type: ignore[attr-defined]
+            control.diverged = False
+            control.expected_ip = None
 
     def handle_rep_insn(self) -> None:
         pass
 
     def handle_exception(self) -> None:
         def is_exception(s: SimState) -> bool:
-            br = s.control.current_branch  # type: ignore[attr-defined]
-            return br.get('exception', False) and br['from_ip'] == Angr.state_ip(s)
+            control = cast(ControlStatePlugin, s.control)  # type: ignore[attr-defined]
+            br = control.current_branch
+            return br is not None and br.get('exception', False) and br['from_ip'] == Angr.state_ip(s)
 
         if not any(is_exception(s) for s in self.simgr.active):
             return
@@ -335,8 +337,8 @@ class AngrSim:
         self.simgr.move('active', 'diverged', lambda x:x.control.diverged)
 
     def handle_predicated_mov(self) -> None:
-        cmov_states = [s for s in self.simgr.active
-                        if s.control.detailed_trace and self.angr_mgr.is_predicated_mov(s)]
+        cmov_states = [s for s in self.simgr.active  # type: ignore[union-attr]
+                        if s.control.detailed_trace and self.angr_mgr.is_predicated_mov(s)]  # type: ignore[attr-defined]
 
         for s in cmov_states:
             ip = Angr.state_ip(s)
@@ -369,7 +371,7 @@ class AngrSim:
         return True
 
     def constrain_calls(self) -> None:
-        for s in self.simgr.active:
+        for s in self.simgr.active:  # type: ignore[union-attr]
             insn = self.angr_mgr.get_insn(s)
             if not arch.is_call_insn(insn):
                 continue
@@ -384,11 +386,12 @@ class AngrSim:
             if op.type != capstone.x86.X86_OP_REG or op.size != 8:
                 continue
 
-            if s.control.current_branch['from_ip'] != Angr.state_ip(s):
+            control = cast(ControlStatePlugin, s.control)  # type: ignore[attr-defined]
+            if control.current_branch is None or control.current_branch['from_ip'] != Angr.state_ip(s):
                 continue
 
             reg = s.registers.load(insn.op_str)
-            to_ip = s.control.current_branch['to_ip']
+            to_ip = control.current_branch['to_ip']
             s.add_constraints(reg == to_ip)
             s.registers.store(insn.op_str, to_ip)
 
@@ -396,8 +399,9 @@ class AngrSim:
         simgr = self.simgr
         start_step_time = time.time()
 
-        for s in simgr.active:
-            s.control.update(s)
+        for s in simgr.active:  # type: ignore[union-attr]
+            control = cast(ControlStatePlugin, s.control)  # type: ignore[attr-defined]
+            control.update(s)
 
         #self.constrain_calls()
         simgr.move('active', 'skipped', lambda x: self.is_skipped_code(x))
@@ -424,12 +428,12 @@ class AngrSim:
         return timed_out
 
     def _update_control(self, state: SimState, new_states: List[SimState]) -> None:
-        c = state.control  # type: ignore[attr-defined]
+        c = cast(ControlStatePlugin, state.control)  # type: ignore[attr-defined]
         jump_source = state.history.jump_source
         insn = jump_source and self.angr_mgr.get_insn(jump_source)
 
         jump_target = Angr.state_concrete_addr(state)
-        from_ip, to_ip = c.current_branch['from_ip'], c.current_branch['to_ip']  # type: ignore[attr-defined]
+        from_ip, to_ip = c.current_branch['from_ip'], c.current_branch['to_ip']  # type: ignore[index]
         next_ip = insn and self.angr_mgr.next_insn_addr(insn)
 
         if state.history.jumpkind == 'Ijk_Call':
