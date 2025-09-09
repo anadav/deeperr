@@ -1,0 +1,11 @@
+# Copyright 2023 VMware, Inc.
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Functions that are not pure but we want to ignore their side-effects
+# These functions are ignored during symbolic execution
+do_user_addr_fault
+handle_mm_fault
+kmem_cache_alloc_node
+try_to_wake_up
+__wait_for_common
+wait_for_common

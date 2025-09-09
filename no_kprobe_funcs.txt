@@ -1,0 +1,88 @@
+# Copyright 2023 VMware, Inc.
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Functions that should NOT be kprobed for stability reasons
+# These functions can cause kernel crashes or instability if kprobed
+# They are still traced via other mechanisms but not via kprobes
+#
+# Note: These functions are also ignored during symbolic execution/simulation
+# to avoid simulation issues and maintain consistency
+
+# Functions that cause kprobe instability
+hrtick_update
+rcu_core
+rcu_note_context_switch
+rcu_core_si
+run_rebalance_domains
+profile_tick
+idle_cpu
+__do_softirq
+__kmem_cache_free
+vprintk
+invoke_rcu_core
+module_put
+putname
+nohz_balance_exit_idle
+update_cfg_group
+load_balance
+check_cfs_rq_runtime
+update_blocked_averages
+rebalance_domains
+_printk
+hrtimer_interrupt
+__hrtimer_run_queues
+tick_sched_timer
+tick_sched_do_timer
+irq_exit_rcu
+lapic_next_deadline
+sysvec_apic_timer_interrupt
+cgroup_rstat_updated
+__destroy_inode
+truncate_inode_pages_range
+__const_udelay
+delay_tsc
+destroy_inode
+_raw_spin_unlock_irq
+truncate_inode_pages_final
+evict
+__inode_wait_for_writeback
+iput
+perf_trace_buf_alloc
+perf_trace_sys_exit
+perf_trace_run_bpf_submit
+trace_call_bpf
+migrate_disable
+memcg_account_kmem
+perf_iterate_ctx
+perf_event_switch_output
+__wake_up
+local_clock
+native_sched_clock
+perf_iterate_sb
+syscall_enter_from_user_mode
+mntput
+dput
+mntput_no_expire
+rb_erase
+wakeup_source_unregister
+release_sock
+__check_object_size
+__check_object_size.part.0
+current_time
+ktime_get_coarse_real_ts64
+ext4_inode_csum
+__srcu_read_lock
+__srcu_read_unlock
+fsnotify_destroy_marks
+stop_this_handle
+mnt_drop_write
+dentry_unlink_inode
+crypto_shash_update
+chacha_permute
+ep_remove
+ext4_fc_stop_update
+rcu_read_unlock_strict
+__wait_for_common
+percpu_down_write
+kmalloc_trace
+ftrace_trampoline

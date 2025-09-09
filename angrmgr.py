@@ -20,10 +20,6 @@ from prmsg import pr_msg, Pbar
 from simprocedures import CopyProcedure, RetpolineProcedure, ReturnProcedure, ProcedureWrapper, RepHook
 
 userspace_copy_funcs: Set[str] = {
-#    'copy_user_enhanced_fast_string',
-#    'copy_user_generic_string',
-#    'copy_user_generic_unrolled',
-#    '_copy_from_user'
     '_copy_to_user',
 }
 
@@ -33,18 +29,11 @@ direct_sym_libc_hooks = {
 }
 
 
-ignore_funcs_pure = {
-    'in_gate_area_no_mm',       # causes a mess and should not be traced at all
-}
+ignore_funcs_pure: Set[str] = set()
 
-ignore_funcs_nopure = {
-    "do_user_addr_fault",       # rdpkru
-    "handle_mm_fault",          # rdpkru
-    'kmem_cache_alloc_node',
-    'try_to_wake_up',
-    '__wait_for_common',
-    'wait_for_common',
-}
+ignore_funcs_nopure: Set[str] = set()
+
+no_kprobe_funcs: Set[str] = set()
 
 # Returns the number of uncopied bytes unlike memcpy
 
@@ -104,15 +93,19 @@ class Angr:
         arch.init_symbols(self.proj)
 
         self.no_probe_sym_names = (ignore_funcs_pure|ignore_funcs_nopure|
-                                    userspace_copy_funcs|direct_sym_libc_hooks)
+                                    userspace_copy_funcs|direct_sym_libc_hooks|
+                                    no_kprobe_funcs)
 
-        self.ignore_sym_names = ignore_funcs_pure|ignore_funcs_nopure
+        # During simulation, we ignore pure functions, non-pure functions, and
+        # functions that can't be kprobed (for safety/stability)
+        self.ignore_sym_names = ignore_funcs_pure|ignore_funcs_nopure|no_kprobe_funcs
 
     def read_ignored_funcs(self) -> None:
         script_path = os.path.abspath(__file__)
         script_dir = os.path.dirname(script_path)
+        
+        # Read ignore_funcs_pure.txt
         try:
-            # Read from a file list of ignored pure functions
             file_path = os.path.join(script_dir, 'ignore_funcs_pure.txt')
             with open(file_path, 'r') as f:
                 for line in f:
@@ -122,6 +115,30 @@ class Angr:
                     ignore_funcs_pure.add(line)
         except FileNotFoundError as e:
             raise FileNotFoundError(f"error reading ignore_funcs_pure.txt: {e}")
+        
+        # Read ignore_funcs_nopure.txt
+        try:
+            file_path = os.path.join(script_dir, 'ignore_funcs_nopure.txt')
+            with open(file_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('#') or len(line) == 0:
+                        continue
+                    ignore_funcs_nopure.add(line)
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"error reading ignore_funcs_nopure.txt: {e}")
+        
+        # Read no_kprobe_funcs.txt
+        try:
+            file_path = os.path.join(script_dir, 'no_kprobe_funcs.txt')
+            with open(file_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('#') or len(line) == 0:
+                        continue
+                    no_kprobe_funcs.add(line)
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"error reading no_kprobe_funcs.txt: {e}")
  
     def save(self) -> List[Dict[str, Any]]:
         code = list()
@@ -363,7 +380,9 @@ class Angr:
             return None
 
     def init_general_hooks(self) -> None:
-        for sym_name in ignore_funcs_pure:
+        # Hook all functions that should be ignored during simulation
+        # This includes pure functions and functions that can't be kprobed
+        for sym_name in (ignore_funcs_pure | no_kprobe_funcs):
             try:
                 sym = self.get_sym(sym_name)
             except ValueError:
