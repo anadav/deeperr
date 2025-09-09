@@ -74,7 +74,6 @@ class IntelPTRecorder(Recorder):
             except ProcessLookupError:
                 pr_msg("perf process already terminated", level='WARN')
                 self.dump_filenames = []
-            return
 
         # Snapshots do not work well with Intel PT, and since the parent might already have
         # many children, it is problematic to attach perf only to these processes again.        
