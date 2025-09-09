@@ -373,6 +373,9 @@ class AngrSim:
     def constrain_calls(self) -> None:
         for s in self.simgr.active:  # type: ignore[union-attr]
             insn = self.angr_mgr.get_insn(s)
+            if insn is None:
+                continue
+
             if not arch.is_call_insn(insn):
                 continue
 

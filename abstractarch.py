@@ -1,10 +1,13 @@
 # Copyright 2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
-from typing import Tuple, Union, Callable, Set, List, Dict, Any, Optional, Iterable
+from typing import Tuple, Union, Callable, Set, List, Dict, Any, Optional, Iterable, TYPE_CHECKING
 from abc import ABC, abstractmethod
 
 import angr
 import capstone
+
+if TYPE_CHECKING:
+    from angr.sim_state import SimState
 
 class ControlStatePluginArch(ABC):
     def __init__(self):
@@ -69,6 +72,25 @@ class Arch(ABC):
 
     @abstractmethod
     def is_predicated_mov(self, insn) -> bool:
+        pass
+
+    @abstractmethod
+    def predicated_mov_constraint(self, state: 'SimState', cond_true: bool, insn: capstone.CsInsn) -> List['SimState']:
+        """
+        Handle predicated move instructions (CMOVxx, SETxx) by creating constrained states.
+        
+        Returns two states following a conditional move constraint:
+        - The first is the state where the condition was met (move happened)
+        - The second is the state where the condition was not met (move didn't happen)
+        
+        Args:
+            state: The current simulation state
+            cond_true: Whether the condition was actually true in the trace
+            insn: The conditional move instruction
+            
+        Returns:
+            List of two states: [taken_state, not_taken_state]
+        """
         pass
 
     @property
