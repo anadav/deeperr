@@ -158,7 +158,11 @@ class KProbesRecorder(Recorder):
 
         pr_msg('Setting ftrace buffer size...', level='DEBUG')
         start_time = time.time()
-        ftrace.buffer_size_kb = self.snapshot_size
+        # Convert snapshot_size from bytes to KB for ftrace
+        buffer_size_kb = self.snapshot_size // 1024
+        buffer_size_mb = buffer_size_kb / 1024
+        pr_msg(f'Setting buffer to {buffer_size_mb:.1f}MB ({buffer_size_kb}KB)...', level='DEBUG')
+        ftrace.buffer_size_kb = buffer_size_kb
         pr_msg(f'Buffer size set in {time.time() - start_time:.2f}s', level='DEBUG')
         
         pr_msg('Configuring ftrace options...', level='DEBUG')
