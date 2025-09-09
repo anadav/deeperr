@@ -124,13 +124,16 @@ class Kallsyms:
             self.intervals[min_addr:max_addr] = syms
 
         for syms in bpf_syms + builtin_syms:
-            min_addr = self.__get_min_addr(syms)
-            max_addr = self.__get_max_addr(syms)
-            # Skip zero-size intervals which IntervalTree doesn't allow
-            if min_addr < max_addr:
+            try:
+                min_addr = self.__get_min_addr(syms)
+                max_addr = self.__get_max_addr(syms)
+                if min_addr >= max_addr:
+                    # For zero-size intervals, create a minimal 1-byte interval
+                    max_addr = min_addr + 1
                 self.intervals[min_addr:max_addr] = syms
-            else:
-                logging.debug(f"Skipping zero-size interval for symbols: {syms[0][0] if syms else 'unknown'}")
+            except (ValueError, IndexError) as e:
+                # Skip symbols that can't be processed
+                logging.debug(f"Skipping symbols due to error: {e}, symbols: {syms[0][0] if syms else 'unknown'}")
 
         self.exes = dict()
 

@@ -188,10 +188,21 @@ class Angr:
                 assert isinstance(exe['size'], int)
                 assert isinstance(exe['segments'], List)
 
-                segments = [(kcore.get_offset(s[0]), s[0], s[1] - s[0]) for s in exe['segments']]
+                segments = []
+                for s in exe['segments']:
+                    try:
+                        offset = kcore.get_offset(s[0])
+                        # Validate offset is within reasonable bounds
+                        if offset < 0 or offset > 2**63 - 1:
+                            logging.debug(f"Skipping segment with invalid offset {offset} for address {s[0]:x}")
+                            continue
+                        segments.append((offset, s[0], s[1] - s[0]))
+                    except (ValueError, OverflowError) as e:
+                        logging.debug(f"Skipping segment due to offset error: {e}")
+                        continue
 
-            # filter out segments with negative size (3rd)
-            segments = [s for s in segments if s[2] > 0]
+            # filter out segments with negative or zero size (3rd element)
+            segments = [s for s in segments if s[2] > 0 and s[0] >= 0]
 
             # Skip if no valid segments remain
             if not segments:
