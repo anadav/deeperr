@@ -62,7 +62,8 @@ class KprobesReporter(Reporter):
             elif ty == 'func':
                 pr_msg(f"processing function entry - from 0x{l['from_ip']:x}@{l['from_func']} to 0x{l['to_ip']:x}@{l['to_func']}", level="DEBUG")
                 try:
-                    next_ip = self.angr_mgr.get_prev_insn(l['from_ip']).address
+                    prev_insn = self.angr_mgr.get_prev_insn(l['from_ip'])
+                    next_ip = prev_insn.address if prev_insn else None
                 except ValueError:
                     next_ip = None
             else:
@@ -124,6 +125,10 @@ class KprobesReporter(Reporter):
             if ty == 'probe' and match_ip and unemulated_call_entry is not None:
                 unemulated_call_entry['ret'] = l['ax']
                 unemulated_call_entry = None
+
+            # If insn is None at this point, we can't process branch instructions
+            if insn is None:
+                continue
 
             if arch.is_indirect_jmp_insn(insn):
                 raise NotImplementedError("indirect jump")
