@@ -140,19 +140,16 @@ class IntelPTRecorder(Recorder):
             
             # Check for specific kcore error
             if "kcore is not readable" in perf_output_str:
-                import sys
-                python_exe = sys.executable
                 pr_msg("", level="ERROR")
                 pr_msg("ERROR: /proc/kcore is not readable. This is required for Intel PT recording.", level="ERROR")
                 pr_msg("", level="ERROR")
                 pr_msg("To fix this, run the install mode with sudo:", level="ERROR")
-                pr_msg(f"  sudo {python_exe} ./syscall-failure-analyzer.py install", level="ERROR")
+                pr_msg("  sudo python3 ./syscall-failure-analyzer.py install", level="ERROR")
                 pr_msg("", level="ERROR")
                 pr_msg("This will configure the necessary permissions for unprivileged users.", level="ERROR")
                 pr_msg("After running install mode, you can use the tool without sudo.", level="ERROR")
                 pr_msg("", level="ERROR")
-                pr_msg("Alternatively, you can run this tool with sudo each time:", level="ERROR")
-                pr_msg(f"  sudo {python_exe} ./syscall-failure-analyzer.py record -- <command>", level="ERROR")
+                pr_msg("Note: Install mode works without virtual environment dependencies.", level="ERROR")
             else:
                 pr_msg(f"hint: check that perf that is compatible with the current kernel was provided", level="WARN")
             

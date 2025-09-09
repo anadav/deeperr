@@ -9,26 +9,59 @@ import os
 import pickle
 import sys
 import io
-import lz4.frame
 import subprocess
 import shutil
 from typing import Optional, Set, List, Any, Dict, Union
 
-from angrmgr import Angr
-from addr2line import Addr2Line
-from claripy.backends.backend_smtlib_solvers import *  # Required for angr's solver system
-from intelptrecorder import IntelPTRecorder
-from intelptreporter import IntelPTReporter
-from kallsyms import Kallsyms, get_vmlinux
-from kprobesrecorder import KProbesRecorder
-from kprobesreporter import KprobesReporter
-from reporter import Reporter
-from prmsg import pr_msg, quiet, warn_once, change_output, set_debug, set_quiet
-from ptrace.debugger.child import createChild
-from ptrace.tools import locateProgram
-from syscall import ErrorcodeInfo, SyscallInfo
-from kcore import Kcore
-from ftrace import Ftrace
+# Minimal pr_msg for install mode (doesn't require tqdm or other dependencies)
+def pr_msg_minimal(msg, level='INFO'):
+    """Minimal print message function for install mode"""
+    colors = {
+        'INFO': '\033[0m',      # Default
+        'WARN': '\033[33m',     # Yellow
+        'ERROR': '\033[31m',    # Red
+        'FATAL': '\033[31m',    # Red
+        'DEBUG': '\033[90m',    # Gray
+    }
+    color = colors.get(level, '\033[0m')
+    reset = '\033[0m'
+    print(f"{color}{msg}{reset}")
+
+# Use minimal pr_msg by default
+pr_msg = pr_msg_minimal
+quiet = lambda: None
+warn_once = lambda: None
+change_output = lambda x: None
+set_debug = lambda x=None: None  # Accept optional argument
+set_quiet = lambda x=None: None   # Accept optional argument
+
+# Defer heavy imports until needed to allow install mode to work without venv
+def load_analysis_modules():
+    """Load modules needed for record/report operations (not needed for install)"""
+    global Angr, Addr2Line, IntelPTRecorder, IntelPTReporter, Kallsyms, get_vmlinux
+    global KProbesRecorder, KprobesReporter, Reporter, createChild, locateProgram
+    global ErrorcodeInfo, SyscallInfo, Kcore, Ftrace, lz4
+    global pr_msg, quiet, warn_once, change_output, set_debug, set_quiet
+    
+    # Import the real prmsg functions now that we're loading full dependencies
+    from prmsg import pr_msg as pr_msg_real, quiet, warn_once, change_output, set_debug, set_quiet
+    pr_msg = pr_msg_real  # Replace minimal version with real one
+    
+    import lz4.frame
+    from angrmgr import Angr
+    from addr2line import Addr2Line
+    import claripy.backends.backend_smtlib_solvers  # Required for angr's solver system
+    from intelptrecorder import IntelPTRecorder
+    from intelptreporter import IntelPTReporter
+    from kallsyms import Kallsyms, get_vmlinux
+    from kprobesrecorder import KProbesRecorder
+    from kprobesreporter import KprobesReporter
+    from reporter import Reporter
+    from ptrace.debugger.child import createChild
+    from ptrace.tools import locateProgram
+    from syscall import ErrorcodeInfo, SyscallInfo
+    from kcore import Kcore
+    from ftrace import Ftrace
 
 DEFAULT_DATA_FILENAME = 'deeperr.data'
 
@@ -161,7 +194,11 @@ def main() -> None:
         if os.geteuid() != 0:
             pr_msg(f'Install mode must be run as root', level='FATAL')
             exit(1)
-    elif os.geteuid() != 0 and args.command in ['record', 'report']:
+    else:
+        # Load heavy dependencies only for record/report modes
+        load_analysis_modules()
+    
+    if os.geteuid() != 0 and args.command in ['record', 'report']:
         # Check if capabilities are set on the real Python binary
         real_python = os.path.realpath(sys.executable)
         try:
@@ -191,27 +228,7 @@ def main() -> None:
 
     logging.basicConfig(filename='deeperr.log', level=loglevel, force=True)
     logging.getLogger().setLevel(loglevel)
-    for l in ['angr', 'cle', 'pyvex', 'claripy']:
-        logging.getLogger(l).setLevel('ERROR')
-
-    objs = get_vmlinux(args.objs)
-
-    syscall_filter = None
-    if args.syscall is not None:
-        try:
-            syscall_filter = SyscallInfo.get_syscall_nr(args.syscall)
-        except ValueError as e:
-            pr_msg(str(e), level="ERROR")
-            pr_msg('recording all syscall', level="WARN")
-    errcode_filter = ErrorcodeInfo.get_errno(args.errcode) if args.errcode else None
-    occurrences_filter = get_occurrences(args.occurrences) if args.occurrences else None
-
-    a2l = Addr2Line.get_instance()
-    a2l.llvm_symbolizer = args.llvm_symbolizer
-
-    if args.command == 'record' and len(remaining_argv) < 1:
-        arg_error(parser)
-
+    
     if args.command == 'install':
         pr_msg('Setting up permissions for unprivileged users...', level='INFO')
         
@@ -418,6 +435,29 @@ def main() -> None:
         pr_msg(f'  {helper_script} report', level='INFO')
         pr_msg('\nNote: Some features may still require elevated privileges.', level='WARN')
         pr_msg('If you encounter permission issues, try running with sudo.', level='WARN')
+        return  # Exit after install completes
+    
+    # The rest of the code is for record/report commands
+    for l in ['angr', 'cle', 'pyvex', 'claripy']:
+        logging.getLogger(l).setLevel('ERROR')
+
+    objs = get_vmlinux(args.objs)
+
+    syscall_filter = None
+    if args.syscall is not None:
+        try:
+            syscall_filter = SyscallInfo.get_syscall_nr(args.syscall)
+        except ValueError as e:
+            pr_msg(str(e), level="ERROR")
+            pr_msg('recording all syscall', level="WARN")
+    errcode_filter = ErrorcodeInfo.get_errno(args.errcode) if args.errcode else None
+    occurrences_filter = get_occurrences(args.occurrences) if args.occurrences else None
+
+    a2l = Addr2Line.get_instance()
+    a2l.llvm_symbolizer = args.llvm_symbolizer
+
+    if args.command == 'record' and len(remaining_argv) < 1:
+        arg_error(parser)
         return
     
     if args.command == 'record':
