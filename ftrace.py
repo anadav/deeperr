@@ -3,14 +3,14 @@
 import atexit
 import bisect
 import fcntl
-import io
+# import io  # Now using IO from typing instead
 import logging
 import os
 import pathlib
 import re
 import struct
 import sys
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union, Callable
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union, Callable, IO
 
 from cle.backends.symbol import Symbol
 from prmsg import Pbar, pr_msg
@@ -174,7 +174,7 @@ class Ftrace:
         self.kprobe_event_file = None
         self.kprobe_blacklist:Optional[List[Tuple[int,int]]] = None
         self.events = dict()
-        self.pipes:Dict[str,io.BufferedReader] = dict()
+        self.pipes: Dict[str, IO[str]] = dict()
         self.deleted = False
         self.instance_name = instance_name
         self.clear_snaphot_executor = None
@@ -596,7 +596,7 @@ class Ftrace:
     def irq_info(self, enable: bool) -> None:
         self.set_bool('options/irq-info', enable)       
 
-    def open_trace_pipe(self, is_async: bool = False) -> io.BufferedReader:
+    def open_trace_pipe(self, is_async: bool = False) -> IO[str]:
         k = 'async' if is_async else 'sync'
         if k in self.pipes:
             return self.pipes[k]
@@ -608,11 +608,11 @@ class Ftrace:
         return self.pipes[k]
 
     @property
-    def trace_pipe(self) -> io.BufferedReader:
+    def trace_pipe(self) -> IO[str]:
         return self.open_trace_pipe(False)
     
     @property
-    def async_trace_pipe(self) -> io.BufferedReader:
+    def async_trace_pipe(self) -> IO[str]:
         return self.open_trace_pipe(True)
 
     def get_snapshot(self, skip_trace_events:List[str], resume_trace_events:List[str]) -> List[Dict[str, Any]]:
@@ -946,7 +946,7 @@ class Ftrace:
             assert(not self.removed)
             if v:
                 self.ftrace.kprobes_disabled = False
-            super(Ftrace.KprobeEvent, self.__class__).enable.fset(self, v) # type: ignore
+            Event.enable.fset(self, v)  # type: ignore[attr-defined]
 
         @property
         def target_function(self) -> str:
