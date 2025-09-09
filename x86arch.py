@@ -29,17 +29,17 @@ class ArchX86(Arch):
     X86_EFLAGS_OF = 0x0800
     X86_EFLAGS_IF = 0x0200
 
-    STACK_SIZE = 8
-    STACK_END = 0xffffeb0000000000
-    SYSCALL_INSN_LEN = 2
+    _STACK_SIZE = 8
+    _STACK_END = 0xffffeb0000000000
+    _SYSCALL_INSN_LEN = 2
 
     @property
     def stack_end(self) -> int:
-        return self.STACK_END
+        return self._STACK_END
 
     @property
     def syscall_insn_len(self) -> int:
-        return self.SYSCALL_INSN_LEN
+        return self._SYSCALL_INSN_LEN
 
     retpoline_thunk_regs = { 'rax', 'rcx', 'rdx', 'rbx', 'rsp', 'rbp', 'rsi', 'rdi',
                         'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15' }
@@ -161,6 +161,10 @@ class ArchX86(Arch):
 
     def cs_to_pyvex_reg(self, reg:int) -> str:
         return self.cs_to_pyvex_reg_map[reg]
+
+    @property
+    def stack_size(self) -> int:
+        return self._STACK_SIZE
 
     @property
     def pointer_size(self) -> int:
@@ -440,9 +444,9 @@ class ArchX86(Arch):
         else:
             archX86.eflags_if = False
         if rsp is not None:
-            rsp += ArchX86.STACK_SIZE
+            rsp += ArchX86._STACK_SIZE
         else:
-            rsp = ArchX86.STACK_SIZE
+            rsp = ArchX86._STACK_SIZE
         state.registers.store('rsp', rsp)
 
     @staticmethod
@@ -462,9 +466,9 @@ class ArchX86(Arch):
         archX86 = ArchX86.get_control_state_arch(state)
         rsp = state.registers.load('rsp')
         if rsp is not None:
-            rsp -= ArchX86.STACK_SIZE
+            rsp -= ArchX86._STACK_SIZE
         else:
-            rsp = -ArchX86.STACK_SIZE
+            rsp = -ArchX86._STACK_SIZE
         v = state.registers.load(reg)
         if archX86.eflags_if:
             if v is not None:

@@ -214,3 +214,15 @@ class Arch(ABC):
     @abstractmethod
     def address_width(self) -> int:
         pass
+
+    @property
+    @abstractmethod
+    def stack_size(self) -> int:
+        """Size of a stack element in bytes (word size for stack operations)"""
+        pass
+
+    @property
+    @abstractmethod
+    def pointer_size(self) -> int:
+        """Size of a pointer in bytes"""
+        pass

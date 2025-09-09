@@ -123,7 +123,7 @@ class AngrSim:
         except angr.SimValueError:
             pass
         else:
-            for p in range(sp, arch.STACK_END):
+            for p in range(sp, arch.stack_end):
                 try:
                     v = s.mem_concrete(p, 1)
                 except angr.SimValueError:
