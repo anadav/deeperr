@@ -290,6 +290,9 @@ class AngrSim:
                 next_insn = self.angr_mgr.get_insn(ip)
             except (ValueError, TypeError):
                 return
+            
+            if next_insn is None:
+                return
 
             if arch.is_rep_insn(next_insn) and not arch.is_fixed_rep_insn(next_insn):
                 warn_once("REP-prefix with Intel PT cannot be simulated correctly")
@@ -415,9 +418,10 @@ class AngrSim:
             taken_predicated_mov = not matched_entry
             if matched_entry:
                 control.next_branch()
-            successors = arch.predicated_mov_constraint(s, taken_predicated_mov, insn)
-            self.remove_active_state(s)
-            self.extend_active_states(successors)
+            if insn is not None:
+                successors = arch.predicated_mov_constraint(s, taken_predicated_mov, insn)
+                self.remove_active_state(s)
+                self.extend_active_states(successors)
 
     def handle_simulation_timeout(self, step_time: float) -> bool:
         # Occassionally we can get unreasonably long simulation time. If we
@@ -488,8 +492,9 @@ class AngrSim:
                            procedure = Angr.step_func_proc_trace,
                            num_inst = 1)
 
-        # TODO: just get rid of step_func 
-        self.step_func(self.simgr)
+        # TODO: just get rid of step_func
+        if self.simgr is not None:
+            self.step_func(self.simgr)
         
         end_step_time = time.time()
 
@@ -524,12 +529,12 @@ class AngrSim:
                   (not to_ip or to_ip == jump_target)):
                 # This is a hack to ensure Intel PT behaves at least half as sane.
                 # We cannot recover from such a case.
-                if arch.is_direct_branch_insn(insn) and not from_ip and not to_ip:
+                if insn is not None and arch.is_direct_branch_insn(insn) and not from_ip and not to_ip:
                     c.diverged = True
                     c.expected_ip = None 
                 else:
                     c.next_branch()
-            elif arch.is_indirect_call_insn(insn) and jump_source is not None:
+            elif insn is not None and arch.is_indirect_call_insn(insn) and jump_source is not None:
                 # Need to be tolerant to Intel PT shenanigans
                 c.diverged = True
                 c.expected_ip = to_ip
@@ -614,7 +619,7 @@ class AngrSim:
                 if arch.is_indirect_call_insn(insn) and not trace_to_ip:
                     # Assuming you have a state `state`
                     # Force the execution of a 'ret' instruction
-                    ret_proc = angr.SIM_PROCEDURES['stubs']['ReturnUnconstrained']()
+                    ret_proc = angr.SIM_PROCEDURES['stubs']['ReturnUnconstrained']()  # type: ignore[attr-defined]
 
                     # Drop the diverged states, they are likely to diverge
                     simgr.drop(stash='diverged')
@@ -625,7 +630,8 @@ class AngrSim:
 
                     # Execute the 'ret' instruction
                     successors = angr_mgr.proj.factory.procedure_engine.process(state, procedure=ret_proc)
-                    simgr.populate('active', successors.successors)
+                    if successors is not None:
+                        simgr.populate('active', successors.successors)
                     continue
 
 
@@ -633,7 +639,7 @@ class AngrSim:
                 c.diverged = False
 
                 # If we are returning, we need to constrain the return value
-                if arch.is_ret_insn(c.last_insn) and state.history.parent is not None:
+                if c.last_insn is not None and arch.is_ret_insn(c.last_insn) and state.history.parent is not None:
                     ret_reg_name = arch.ret_reg_name
                     ret_reg = state.registers.load(ret_reg_name)
                     parent_ret_reg = state.history.parent.state.registers.load(ret_reg_name)
@@ -649,8 +655,6 @@ class AngrSim:
         simgr.drop(stash='unconstrained')
 
     def is_ret_failure(self, s: SimState) -> bool:
-        control = self.get_control(s)
-
         # Check if the last branch was a return
         if s.history.jumpkind != 'Ijk_Ret':
             return False
@@ -685,7 +689,13 @@ class AngrSim:
         res['simulation diverged'] += 1
 
     def is_void_functions(self, s: SimState) -> bool:
-        sym = self.angr_mgr.get_sym(s)
+        ip = Angr.state_ip(s)
+        if ip is None:
+            return False
+        try:
+            sym = self.angr_mgr.get_sym(ip)
+        except ValueError:
+            return False
 
         if sym in self.return_type_cache:
             return self.return_type_cache[sym] == "void"
@@ -759,9 +769,11 @@ class AngrSim:
                 if insn is None:
                     continue
 
-                sym_name = self.angr_mgr.get_sym_name(s.addr)
-                logging.debug("simulating {0} -> {1} ({2: <20}) {3} {4}".format(hex(insn.address),
-                    hex(s.addr), sym_name, insn.mnemonic, insn.op_str))
+                addr = Angr.state_ip(s)
+                if addr is not None:
+                    sym_name = self.angr_mgr.get_sym_name(addr)
+                    logging.debug("simulating {0} -> {1} ({2: <20}) {3} {4}".format(hex(insn.address),
+                        hex(addr), sym_name, insn.mnemonic, insn.op_str))
 
             self.simgr.move('active', 'deadended',
                             lambda x:len(self.get_control(x).branches) == 0 or self.is_ret_failure(x))
@@ -825,9 +837,9 @@ class AngrSim:
 
             # Some debug printouts
             js = start_state.history and start_state.history.jump_source 
-            jt = start_state.addr
+            jt = Angr.state_ip(start_state)
             js_str = (hex(js) if js else '')
-            jt_str = hex(jt)
+            jt_str = hex(jt) if jt else 'None'
             js_sym_name = js and self.angr_mgr.get_sym_name(js)
             jt_sym_name = jt and self.angr_mgr.get_sym_name(jt)
             pr_msg(f'trying ({js_str} [{js_sym_name}])->({jt_str} [{jt_sym_name}])', level='DEBUG')
@@ -849,6 +861,8 @@ class AngrSim:
 
     def is_ignored_function_on_stack(self, failing_state: SimState) -> bool:
         def is_ignored_function(addr: Optional[int]) -> bool:
+            if addr is None:
+                return False
             try:
                 sym = self.angr_mgr.get_sym(addr)
             except ValueError:
