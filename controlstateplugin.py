@@ -1,6 +1,6 @@
 # Copyright 2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 import copy
 from angr.sim_state import SimState
 from angr.state_plugins.plugin import SimStatePlugin
@@ -21,7 +21,7 @@ class ControlStatePlugin(SimStatePlugin):
         self.last_depth = None
         # Save whether the trace is detailed and includes REP instructions and predicated moves
         self.detailed_trace = detailed_trace
-        self.only_symbols = None
+        self.only_symbols: Optional[Set[Any]] = None
         self.__last_insn = None
         self.diverged = False
         self.expected_ip: Optional[int] = None

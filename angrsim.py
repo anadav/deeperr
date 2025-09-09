@@ -219,7 +219,7 @@ class AngrSim:
             return True
 
         # TODO: Move this to arch
-        if sym.name == '__x86_indirect_thunk_array':
+        if sym is not None and sym.name == '__x86_indirect_thunk_array':
             return False
 
         # _copy_to_user is now properly handled via CopyProcedure hook in angrmgr.py
@@ -388,10 +388,11 @@ class AngrSim:
             c.next_branch()
             return successors
         
-        self.simgr.step(selector_func = is_exception,
+        if self.simgr is not None:
+            self.simgr.step(selector_func = is_exception,
 #                        num_inst = 1,
-                        successor_func = get_exception_successors)
-                  #      procedure = self.exception_procedure)
+                            successor_func = get_exception_successors)
+                      #      procedure = self.exception_procedure)
         self.move_to_diverged()
    
     def move_to_diverged(self) -> None:
@@ -407,6 +408,8 @@ class AngrSim:
             ip = Angr.state_ip(s)
             insn = self.angr_mgr.get_insn(ip)
             control = self.get_control(s)
+            if control.current_branch is None:
+                continue
             matched_entry = (control.current_branch['from_ip'] == ip and
                              control.current_branch['to_ip'] == self.angr_mgr.next_insn_addr(insn))
             taken_predicated_mov = not matched_entry
@@ -422,6 +425,8 @@ class AngrSim:
         # failure, we would just copy the concrete values and continue.
         
         simgr = self.simgr
+        if simgr is None:
+            raise RuntimeError("Simulation manager is not initialized")
         handle_timeout = False
         # TODO: Consider adding: len(self.branches) - trace.b_idx > self.MAX_BACKTRACK_STEPS and
         
@@ -464,6 +469,9 @@ class AngrSim:
 
     def run_one_step(self, stats: Dict[str, Any]) -> bool:
         simgr = self.simgr
+        if simgr is None:
+            raise RuntimeError("Simulation manager is not initialized")
+            
         start_step_time = time.time()
 
         for s in simgr.active:  # type: ignore[union-attr]
@@ -536,9 +544,10 @@ class AngrSim:
 
         elif state.history.jumpkind == 'Ijk_Boring' and insn is not None:
             if arch.is_fixed_rep_insn(insn) and c.detailed_trace:
-                while to_ip == insn.address:
+                while c.current_branch is not None and to_ip == insn.address:
                     c.next_branch()
-                    to_ip = c.current_branch['from_ip']
+                    if c.current_branch is not None:
+                        to_ip = c.current_branch['from_ip']
             elif arch.is_branch_insn(insn):
                 if from_ip == jump_source and to_ip == jump_target:
                     c.next_branch()
@@ -654,6 +663,9 @@ class AngrSim:
         return AngrSim.is_failure(s = s, errcode = self.errcode)
     
     def handle_divergence(self, res: Dict[str, Any]) -> None:
+        if self.simgr is None:
+            raise SystemError("simulation manager not initialized")
+            
         if len(self.simgr.stashes.get('diverged', [])) == 0:
             raise SystemError("simulation failed")
 
@@ -678,6 +690,9 @@ class AngrSim:
         if sym in self.return_type_cache:
             return self.return_type_cache[sym] == "void"
 
+        if sym is None:
+            return False
+            
         addr = sym.linked_addr
         if not sym.owner or not sym.owner.binary:
             return False
@@ -689,8 +704,10 @@ class AngrSim:
 
             t = d.find_function_return_type(cu, addr)
 
-        self.return_type_cache[sym] = t
-        return t == "void"
+        if t is not None:
+            self.return_type_cache[sym] = t
+            return t == "void"
+        return False
 
     def simulate(self) -> Dict[str, Union[List, int]]:
         errno = self.errcode
@@ -699,7 +716,11 @@ class AngrSim:
             'simulation diverged': 0,
             'divergence points': 0
         }
-        
+
+        if self.simgr is None:
+            raise RuntimeError("Simulation manager is not initialized")
+
+ 
         self.simgr.populate('diverged', list())
 
         active = self.active_states
@@ -832,7 +853,7 @@ class AngrSim:
                 sym = self.angr_mgr.get_sym(addr)
             except ValueError:
                 return False
-            return sym and self.angr_mgr.is_ignored_sym(sym)
+            return sym is not None and self.angr_mgr.is_ignored_sym(sym)
 
         for callstack_entry in failing_state.callstack:
             addr = callstack_entry.func_addr
