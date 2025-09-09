@@ -1,5 +1,6 @@
 # Copyright 2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
+setuptools>=68.0.0
 angr==9.2.25
 ansicolors==1.1.8
 capstone==4.0.2
