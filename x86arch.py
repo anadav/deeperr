@@ -206,7 +206,7 @@ class ArchX86(Arch):
             if flags is not None:
                 constraint = (flags & mask) != 0
             else:
-                constraint = claripy.false()
+                constraint = claripy.BoolV(False)
             if invert:
                 constraint = claripy.Not(constraint)#) if cond[1] else flags & cond[0]
             single_bit_cond = (mask & (mask - 1)) == 0
@@ -218,13 +218,13 @@ class ArchX86(Arch):
                 constraint = claripy.And((flags & self.X86_EFLAGS_ZF) == 0,
                         flags_equal(flags, self.X86_EFLAGS_SF, self.X86_EFLAGS_OF))
             else:
-                constraint = claripy.false()
+                constraint = claripy.BoolV(False)
         elif id == capstone.x86.X86_INS_JLE:
             if flags is not None:
                 constraint = claripy.Or((flags & self.X86_EFLAGS_ZF) != 0,
                         claripy.Not(flags_equal(flags, self.X86_EFLAGS_SF, self.X86_EFLAGS_OF)))
             else:
-                constraint = claripy.false()
+                constraint = claripy.BoolV(False)
         elif id == capstone.x86.X86_INS_JL:
             constraint = flags_equal(flags, self.X86_EFLAGS_SF, self.X86_EFLAGS_OF)
         else:
