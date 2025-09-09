@@ -9,7 +9,7 @@ import syscall
 import itertools
 from angrmgr import Angr
 from arch import arch
-from cle.backends import Symbol
+from cle.backends.symbol import Symbol
 from ftrace import Ftrace
 from prmsg import pr_msg, Pbar
 from reporter import Reporter
