@@ -77,7 +77,9 @@ class Reporter(metaclass=abc.ABCMeta):
             to_ip = branch['to_ip']
             if from_ip is None:
                 continue
-            insn = from_ip and self.angr_mgr.get_insn(from_ip)
+            insn = self.angr_mgr.get_insn(from_ip) if from_ip is not None else None
+            if insn is None:
+                continue
 
             if arch.is_ret_insn(insn) and to_ip is not None:
                 if first:
