@@ -108,7 +108,9 @@ int trace_syscalls(struct tracepoint__raw_syscalls__sys_exit *args) {
     if (syscall_ret < MIN_ERROR)
     	return 0;
 
-    if (syscall_ret != error_code_req && error_code_req != -1ull)
+    // For error code filtering, negate syscall_ret to get positive error code
+    // syscall_ret is negative for errors (e.g., -1 for EPERM), error_code_req is positive (e.g., 1 for EPERM)
+    if ((u64)(-syscall_ret) != error_code_req && error_code_req != -1ull)
         return 0;
 
     if (parent_pid != -1ull && !is_descendant(pid, parent_pid))
@@ -133,8 +135,8 @@ int trace_syscalls(struct tracepoint__raw_syscalls__sys_exit *args) {
     syscall_events.perf_submit(args, &event, sizeof(event));
 
     flags = *flags_ptr;
-    //if (flags & STOP_ON_ERROR)
-    bpf_send_signal(SIGSTOP);
+    if (flags & STOP_ON_ERROR)
+        bpf_send_signal(SIGSTOP);
 
     return 0;
 }
