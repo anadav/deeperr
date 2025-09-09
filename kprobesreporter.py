@@ -11,7 +11,8 @@ class KprobesReporter(Reporter):
     def report(self) -> None:
         for failure in self.failures:
             trace = self.traces[failure['trace_id']]
-            sim_syms = [self.angr_mgr.get_sym(s) for s in failure['sim_syms']]
+            sim_syms_list = [self.angr_mgr.get_sym(s) for s in failure['sim_syms']]
+            sim_syms = {s for s in sim_syms_list if s is not None}
             branches = self.ftrace_to_branch(trace = trace,
                                              filter_pid = failure['pid'],
                                              sim_syms = sim_syms)
