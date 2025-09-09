@@ -11,7 +11,6 @@ import lief
 from intervaltree import IntervalTree
 from prmsg import pr_msg
 from collections import defaultdict
-from typing import BinaryIO
 
 from elftools.elf.elffile import ELFFile
 
@@ -21,7 +20,7 @@ from cle import Backend
 import angr
 from arch import arch
 
-def get_vmlinux(user_option:Optional[List[BinaryIO]]) -> List[BinaryIO]:
+def get_vmlinux(user_option:Optional[List[io.BufferedReader]]) -> List[io.BufferedReader]:
     if user_option is None:
         user_option = []
 

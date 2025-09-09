@@ -131,7 +131,7 @@ def main() -> None:
     parser = argparse.ArgumentParser("deeperr", epilog="application")
     parser.add_argument('--verbose', '-v', action='store_true', dest='verbose', help='prints verbose analysis info')
     parser.add_argument('--vmlinux', '-l', action='store', dest='objs', help='location of vmlinux file or other modules', type=argparse.FileType('rb'), nargs='+', default=[])
-    parser.add_argument('--perf', '-f', default='perf', metavar=argparse.FileType('x'), help='location of perf')
+    parser.add_argument('--perf', '-f', default='perf', metavar='PATH', help='location of perf')
     parser.add_argument('--debug', '-d', action='store_true', dest='debug', help='debug mode verbosity')
     parser.add_argument('--llvm-symbolizer', '-y', action='store', dest='llvm_symbolizer', default='llvm-symbolizer', help='path to llvm-symbolizer')
     parser.add_argument('--snapshot-size', '-z', action='store', dest='snapshot_size', type=int, default=262144, help='perf snapshot size')
@@ -372,9 +372,9 @@ def main() -> None:
                 try:
                     # Skip if it's a script
                     if os.path.isfile(perf_binary):
-                        with open(perf_binary, 'rb') as f:
+                        with open(perf_binary, 'rb') as fb:
                             # Check if it's an ELF binary (starts with magic bytes)
-                            magic = f.read(4)
+                            magic = fb.read(4)
                             if magic != b'\x7fELF':
                                 pr_msg(f'Skipping {perf_binary} (not an ELF binary)', level='INFO')
                                 continue
