@@ -42,7 +42,8 @@ class Recorder:
     ) -> None:
         self.output = output
         self.failures: List[Dict] = []
-        self.snapshot_size = max(snapshot_size, 128 * 1024)
+        # Ensure minimum snapshot size of 1MB for reliable capture
+        self.snapshot_size = max(snapshot_size, 1024 * 1024)
         from ptrace.debugger.debugger import PtraceDebugger
         self.dbg = PtraceDebugger()
         self.perf = perf

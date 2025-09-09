@@ -69,8 +69,12 @@ class IntelPTRecorder(Recorder):
         e = {'err': err, 'syscall_nr': syscall, 'pid': pid, 'ts': event.ts/1e9}
 
         if self.record_proc is not None:
+            # Small delay to ensure process is stopped and trace is stable
+            time.sleep(0.1)
             try:
                 self.record_proc.send_signal(signal.SIGUSR2)
+                # Give perf time to capture the snapshot
+                time.sleep(0.2)
             except ProcessLookupError:
                 pr_msg("perf process already terminated", level='WARN')
                 self.dump_filenames = []
@@ -78,8 +82,10 @@ class IntelPTRecorder(Recorder):
         # Snapshots do not work well with Intel PT, and since the parent might already have
         # many children, it is problematic to attach perf only to these processes again.        
         # Wake the thread that reported the error, since the eBPF paused it to allow
-        # tracing to be more successful, but let's give one second before we do so.
+        # tracing to be more successful. We've already waited for snapshot capture above.
         if not self.early_stop:
+            # Additional small delay to ensure snapshot is fully written
+            time.sleep(0.1)
             try:
                 os.kill(pid, signal.SIGCONT)
             except ProcessLookupError:
@@ -233,6 +239,11 @@ class IntelPTRecorder(Recorder):
             return 0
 
         collected = 0
+        
+        # Inform user about snapshot configuration
+        snapshot_size_mb = self.snapshot_size / (1024 * 1024)
+        pr_msg(f"Intel PT snapshot size: {snapshot_size_mb:.1f}MB", level='INFO')
+        pr_msg("Use --snapshot-size to increase if failures are not captured", level='INFO')
 
         try:
             self.init_process(args)

@@ -134,7 +134,7 @@ def main() -> None:
     parser.add_argument('--perf', '-f', default='perf', metavar='PATH', help='location of perf')
     parser.add_argument('--debug', '-d', action='store_true', dest='debug', help='debug mode verbosity')
     parser.add_argument('--llvm-symbolizer', '-y', action='store', dest='llvm_symbolizer', default='llvm-symbolizer', help='path to llvm-symbolizer')
-    parser.add_argument('--snapshot-size', '-z', action='store', dest='snapshot_size', type=int, default=262144, help='perf snapshot size')
+    parser.add_argument('--snapshot-size', '-z', action='store', dest='snapshot_size', type=int, default=1048576, help='perf snapshot size (default: 1MB)')
     parser.add_argument('--tmp', '-t', action='store', dest='tmp_path', default='/tmp', type=valid_path, help='tmp path')
     parser.add_argument('--syscall', '-s', action='store', dest='syscall', help='failing syscall number to track')
     parser.add_argument('--quiet', '-q', action='store_true', dest='quiet', help='quiet mode')
