@@ -7,14 +7,14 @@ from controlstateplugin import ControlStatePlugin
 from arch import arch
 import capstone
 
-def state_ip(s:angr.SimState) -> Optional[int]:
+def state_ip(s: angr.SimState) -> Optional[int]:
     v = s.registers.load(arch.ip_reg_name)
     try:
         return s.solver.eval_one(v)
     except angr.SimValueError:
         return None
 
-def track_to_ret(proc: angr.SimProcedure):
+def track_to_ret(proc: angr.SimProcedure) -> None:
     state = proc.state
     control = state.control
     assert isinstance(control, ControlStatePlugin)
@@ -47,7 +47,7 @@ def track_to_ret(proc: angr.SimProcedure):
             'from_offset': None
         })
 
-def track_out_of_syms(proc: angr.SimProcedure, sym_names:Set[str]):
+def track_out_of_syms(proc: angr.SimProcedure, sym_names: Set[str]) -> None:
     state = proc.state
     control = state.control
     assert isinstance(control, ControlStatePlugin)
@@ -70,10 +70,10 @@ def track_out_of_syms(proc: angr.SimProcedure, sym_names:Set[str]):
 class CopyProcedure(angr.SimProcedure):
     #pylint:disable=arguments-differ
 
-    def run(self, dst_addr, src_addr, limit):
+    def run(self, dst_addr, src_addr, limit):  # type: ignore[override]
         track_to_ret(self)
         copied = self.state.solver.BVS('copied', 64)
-        self.state.add_constraints(copied >= 0)
+        self.state.add_constraints(copied >= 0)  # type: ignore[operator]
 
         if False and 'unconstrained' in str(limit):
             old_limit = limit
@@ -90,14 +90,14 @@ class CopyProcedure(angr.SimProcedure):
 
         return self.ret(limit - copied)
 
-    def __rept__(self) -> str:
+    def __repr__(self) -> str:
         return 'CopyProcedure'
 
 class ReturnProcedure(angr.SimProcedure):
-    def __init__(self):
+    def __init__(self) -> None:
         super(ReturnProcedure, self).__init__()
 
-    def run(self):
+    def run(self):  # type: ignore[override]
         control = self.state.control
         assert isinstance(control, ControlStatePlugin)
 
@@ -116,14 +116,14 @@ class ReturnProcedure(angr.SimProcedure):
         return r
 
 class ProcedureWrapper(angr.SimProcedure):
-    def __init__(self, proc_class:Type[angr.SimProcedure], limits:Optional[Tuple[Optional[int], Optional[int]]]=None):
+    def __init__(self, proc_class: Type[angr.SimProcedure], limits: Optional[Tuple[Optional[int], Optional[int]]] = None) -> None:
         super(ProcedureWrapper, self).__init__()
         self.proc_class = proc_class
         sig = inspect.signature(proc_class.run)
         self.n_parameters = len(sig.parameters) - 1
         self.limits = limits and enumerate(limits)
 
-    def run(self):
+    def run(self):  # type: ignore[override]
         # Collect arguments from the state registers according to the calling convention
         track_to_ret(self)
 
@@ -134,7 +134,7 @@ class ProcedureWrapper(angr.SimProcedure):
         arg_values = [self.state.registers.load(reg) for reg in args][:self.n_parameters]
 
         if self.limits:
-            for i, (min_val, max_val) in self.limits:
+            for i, (min_val, max_val) in self.limits:  # type: ignore[misc]
                 if min_val is None and max_val is None:
                     continue
 
@@ -152,10 +152,10 @@ class ProcedureWrapper(angr.SimProcedure):
         return result.sign_extend(arch.address_width - result.length)
 
 class RepHook(angr.exploration_techniques.tracer.RepHook):
-    def __init__(self, mnemonic):
+    def __init__(self, mnemonic: str) -> None:
         super().__init__(mnemonic.split(" ")[1])
 
-    def trace_to_next(self, state):
+    def trace_to_next(self, state: angr.SimState) -> None:
         c = state.control
         assert isinstance(c, ControlStatePlugin)
         if not c.backtracking:
@@ -165,7 +165,7 @@ class RepHook(angr.exploration_techniques.tracer.RepHook):
                 c.next_branch()
                 br = c.current_branch
 
-    def run(self, state, procedure=None, *arguments, **kwargs):
+    def run(self, state: angr.SimState, procedure=None, *arguments, **kwargs) -> None:  # type: ignore[override]
         self.trace_to_next(state)
 
         if procedure is not None:
@@ -178,11 +178,11 @@ class RepHook(angr.exploration_techniques.tracer.RepHook):
 
 # TODO: Move to AngrSim
 class RetpolineProcedure(angr.SimProcedure):
-    def __init__(self, reg: str):
+    def __init__(self, reg: str) -> None:
         super(RetpolineProcedure, self).__init__()
         self.reg = reg
 
-    def run(self):
+    def run(self):  # type: ignore[override]
         state = self.state
         reg = getattr(state.regs, self.reg)
         control = state.control
@@ -198,7 +198,7 @@ class RetpolineProcedure(angr.SimProcedure):
         current_state_ip = state_ip(state)
         prev_state_ip = state.history and state.history.parent and state.history.parent.addr
 
-        def in_retpoline(ip:int) -> bool:
+        def in_retpoline(ip: int) -> bool:
             sym_name = angr_mgr.get_sym_name(ip)
             return (sym_name.startswith('__x86_indirect_thunk') or 
                     sym_name in {'__x86_return_thunk', 'zen_untrain_ret'})
