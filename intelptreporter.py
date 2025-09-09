@@ -200,7 +200,7 @@ class IntelPTReporter(Reporter):
         return (entry.get('to_sym') == 'syscall_exit_to_user_mode' and
                 entry['to_off'] == 0)
 
-    def report(self) -> bool:
+    def report(self) -> None:
         n_reported = 0
         n_traces = len(self.traces)
         n_failures = len(self.failures)
@@ -272,9 +272,9 @@ class IntelPTReporter(Reporter):
                     n_reported += 1
 
                     if n_reported == n_failures:
-                        return True
+                        return
 
-        return True
+        return
 
     def find_time(self, trace:List[str], time:float, before:bool) -> Optional[int]:
         """Find the index of the first entry with the given time"""
@@ -371,7 +371,7 @@ class IntelPTReporter(Reporter):
                 if in_fentry:
                     try:
                         insn = self.angr_mgr.get_insn(from_ip)
-                    except:
+                    except Exception:
                         continue
                     if from_sym == '__fentry__' and insn and arch.is_ret_insn(insn):
                         in_fentry = False
@@ -474,6 +474,7 @@ class IntelPTReporter(Reporter):
         # As a hueristic, which might only fit x86-64, we will look for a call from
         # the entry point.
         found_insn = None
+        found_idx = enter_entry_idx
         for i in range(enter_entry_idx, exit_entry_idx):
             insn = self.angr_mgr.get_insn(entries[i][1]['from_ip'])
             if insn is None or not arch.is_call_insn(insn):
@@ -484,20 +485,23 @@ class IntelPTReporter(Reporter):
             if to_sym and self.angr_mgr.is_ignored_sym(to_sym):
                 continue
             found_insn = insn
+            found_idx = i
             break
         
-        enter_entry_idx = i
+        enter_entry_idx = found_idx
         if enter_entry_idx == exit_entry_idx or found_insn is None:
             return None
         
         # Cut the end of the trace to the return address of the first call.
         # This is a heuristic that might not work for all architectures.
         expected_ret_addr = self.angr_mgr.next_insn_addr(found_insn)
+        found_exit_idx = exit_entry_idx
         for i in range(exit_entry_idx, enter_entry_idx, -1):
             if entries[i][1]['to_ip'] == expected_ret_addr:
+                found_exit_idx = i
                 break
 
-        exit_entry_idx = i
+        exit_entry_idx = found_exit_idx
         if enter_entry_idx == exit_entry_idx:
             return None
 
