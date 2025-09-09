@@ -12,11 +12,11 @@ import io
 import lz4.frame
 import subprocess
 import shutil
-from typing import Optional, Set, List, BinaryIO
+from typing import Optional, Set, List, Any, Dict, Union
 
 from angrmgr import Angr
 from addr2line import Addr2Line
-from claripy.backends.backend_smtlib_solvers import *
+from claripy.backends.backend_smtlib_solvers import *  # Required for angr's solver system
 from intelptrecorder import IntelPTRecorder
 from intelptreporter import IntelPTReporter
 from kallsyms import Kallsyms, get_vmlinux
@@ -39,7 +39,7 @@ def get_occurrences(s:str) -> Optional[Set[int]]:
         return {int(s)}
     try:
         r = {int(v.strip()) for v in s.split(',')}
-    except:
+    except (ValueError, AttributeError):
         pr_msg('Could not parse occurances list, skipping input', level='ERROR')
         r = None
 
@@ -53,7 +53,7 @@ def report(inputs: str,
            syscall_filter: Optional[int],
            errcode_filter: Optional[int],
            occurrences_filter: Optional[Set[int]],
-           **kwargs):
+           **kwargs: Any) -> None:
     if output is not None:
         try:
             change_output(output)
@@ -112,18 +112,18 @@ def report(inputs: str,
             'src_path': src_path,
         }
 
-        reporter:Reporter = reporter_cls(**report_kwargs)
+        reporter: Reporter = reporter_cls(**report_kwargs)
         reporter.report()
 
 
-def valid_path(path):
+def valid_path(path: str) -> str:
     if os.path.exists(path):
         return path
     else:
         raise argparse.ArgumentTypeError(f"Path '{path}' does not exist.")
 
-def main():
-    def arg_error(parser: argparse.ArgumentParser):
+def main() -> None:
+    def arg_error(parser: argparse.ArgumentParser) -> None:
         # add suffix to the usage string
         parser.print_help()
         exit()
@@ -153,7 +153,7 @@ def main():
 
     try:
         args, remaining_argv = parser.parse_known_args()
-    except:
+    except SystemExit:
         # Exit with error
         exit(1)
 
@@ -170,7 +170,7 @@ def main():
                 pr_msg(f'This tool requires root privileges or proper capabilities.', level='FATAL')
                 pr_msg(f'Run "sudo {sys.executable} {__file__} install" to set up permissions.', level='INFO')
                 exit(1)
-        except:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             pr_msg(f'This tool requires root privileges.', level='FATAL')
             pr_msg(f'Run "sudo {sys.executable} {__file__} install" to set up permissions.', level='INFO')
             exit(1)
@@ -201,12 +201,10 @@ def main():
         try:
             syscall_filter = SyscallInfo.get_syscall_nr(args.syscall)
         except ValueError as e:
-            pr_msg(e, level="ERROR")
+            pr_msg(str(e), level="ERROR")
             pr_msg('recording all syscall', level="WARN")
-
-    syscall_filter = SyscallInfo.get_syscall_nr(args.syscall)
-    errcode_filter = ErrorcodeInfo.get_errno(args.errcode)
-    occurrences_filter = get_occurrences(args.occurrences)
+    errcode_filter = ErrorcodeInfo.get_errno(args.errcode) if args.errcode else None
+    occurrences_filter = get_occurrences(args.occurrences) if args.occurrences else None
 
     a2l = Addr2Line.get_instance()
     a2l.llvm_symbolizer = args.llvm_symbolizer
@@ -326,12 +324,13 @@ def main():
         
         if perf_path:
             # Check if perf_path is a wrapper script and find the real binary
-            real_perf_paths = []
+            real_perf_paths: List[str] = []
             
             # Check if it's the standard Ubuntu perf wrapper
             if os.path.isfile(perf_path):
-                with open(perf_path, 'r') as f:
-                    first_line = f.readline()
+                try:
+                    with open(perf_path, 'r') as f:
+                        first_line = f.readline()
                     if first_line.startswith('#!/bin/bash'):
                         # It's likely a wrapper script, find the real perf binary
                         import platform
@@ -356,12 +355,14 @@ def main():
                     else:
                         # It's the actual binary
                         real_perf_paths = [perf_path]
+                except (IOError, OSError):
+                    real_perf_paths = [perf_path]
             else:
                 real_perf_paths = [perf_path]
             
             # Remove duplicates while preserving order
-            seen = set()
-            unique_perf_paths = []
+            seen: Set[str] = set()
+            unique_perf_paths: List[str] = []
             for path in real_perf_paths:
                 if path not in seen:
                     seen.add(path)
@@ -425,7 +426,7 @@ def main():
         if not kprobes and not IntelPTRecorder.cpu_supports_pt():
             pr_msg("CPU does not support Intel PT", level="ERROR")
 
-        recorder_cls = KProbesRecorder if kprobes else IntelPTRecorder
+        recorder_cls: Any = KProbesRecorder if kprobes else IntelPTRecorder
         a = recorder_cls(
             perf=args.perf,
             objs=objs,
