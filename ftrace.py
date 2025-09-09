@@ -111,7 +111,7 @@ class Ftrace:
 
     blacklist_regex = re.compile(blacklist_pattern)
 
-    __instance:Optional['Ftrace'] = None
+    __instance: Optional['Ftrace'] = None
 
     @staticmethod 
     def main_instance(angr_mgr:Optional[Any] = None) -> 'Ftrace':
@@ -145,7 +145,7 @@ class Ftrace:
 
         for _, ev in self.events.items():
             ev.enable = False
-        self.events = list()
+        self.events = dict()
 
         #self.tracing_on = False
         self.current_tracer = 'nop'
@@ -170,7 +170,7 @@ class Ftrace:
         self.kprobes_cleared = False
         self.kprobes_disabled = False
         #self.kprobes:Dict[Tuple[int, bool], 'Ftrace'.KprobeEvent] = dict()
-        self.kprobes:Dict[str, 'Ftrace'.KprobeEvent] = dict()
+        self.kprobes: Dict[str, 'Ftrace.KprobeEvent'] = dict()
         self.kprobe_event_file = None
         self.kprobe_blacklist:Optional[List[Tuple[int,int]]] = None
         self.events = dict()
@@ -238,7 +238,7 @@ class Ftrace:
                     kprobe_base_sym_name]:
             try:
                 self.sym_addrs[sym] = get_addr_fn(sym)
-            except ValueError as e:
+            except ValueError:
                 self.sym_addrs[sym] = None
         self.read_invalid_kprobe_addrs()
 
@@ -328,7 +328,7 @@ class Ftrace:
         return int(self.read_cached("buffer_total_size_kb"))
     
     @buffer_total_size_kb.setter
-    def buffer_total_size_kb(self, size:int):
+    def buffer_total_size_kb(self, size: int) -> None:
         self.write_cached("buffer_total_size_kb", str(size))
     
     @property
@@ -336,7 +336,7 @@ class Ftrace:
         return int(self.read_cached("buffer_size_kb"))
     
     @buffer_size_kb.setter
-    def buffer_size_kb(self, size:int):
+    def buffer_size_kb(self, size: int) -> None:
         self.write_cached("buffer_size_kb", str(size))
 
     @property
@@ -344,7 +344,7 @@ class Ftrace:
         return self.read_cached("set_ftrace_filter").split()
 
     @func_filter.setter
-    def func_filter(self, funcs:Iterable[str]):
+    def func_filter(self, funcs: Iterable[str]) -> None:
         self.write_cached("set_ftrace_filter", '\n'.join(funcs))
 
     def __read_kernel_table(self, start_sym: str, end_sym: str) -> Tuple[bytes, int, int]:
@@ -432,7 +432,7 @@ class Ftrace:
 
     def kprobe_event_disable_all(self, force_quiet: bool = False) -> None:
         if self.kprobes_disabled:
-            return 0
+            return
         #dirs = ([] if not event_probe_path.exists() else
         #        [d for d in event_probe_path.iterdir() if d.is_dir()])
 #        for d in Pbar('disabling kprobes', dirs, unit="kprobe", disable=force_quiet):
@@ -451,7 +451,7 @@ class Ftrace:
         # IN ADDITION REMOVE THEM
         try:
             self.kprobe_event_file.close()
-        except OSError as e:
+        except OSError:
             logging.warning("failed closing kprobe_event")
 
         self.kprobe_event_file = None
@@ -521,7 +521,7 @@ class Ftrace:
         return self.read_cached('current_tracer')
 
     @current_tracer.setter
-    def current_tracer(self, tracer:str):
+    def current_tracer(self, tracer: str) -> None:
         if tracer not in self.available_tracers:
             raise Exception(f'invalid tracer {tracer}')
         self.write_cached('current_tracer', tracer)
@@ -544,31 +544,31 @@ class Ftrace:
         return self.__get_pid("set_ftrace_pid")
 
     @pid.setter
-    def pid(self, pids:List[int]):
-        return self.__set_pid("set_ftrace_pid", pids)
+    def pid(self, pids: List[int]) -> None:
+        self.__set_pid("set_ftrace_pid", pids)
     
     @property
     def event_pid(self) -> List[int]:
         return self.__get_pid("set_event_pid")
 
     @event_pid.setter
-    def event_pid(self, pids:List[int]):
-        return self.__set_pid("set_event_pid", pids)
+    def event_pid(self, pids: List[int]) -> None:
+        self.__set_pid("set_event_pid", pids)
 
     @property
     def event_notrace_pid(self) -> List[int]:
         return self.__get_pid("set_event_notrace_pid")
 
     @event_notrace_pid.setter
-    def event_notrace_pid(self, pids):
-        return self.__set_pid("set_event_notrace_pid", pids)
+    def event_notrace_pid(self, pids: List[int]) -> None:
+        self.__set_pid("set_event_notrace_pid", pids)
 
     @property
     def trace_clock(self) -> str:
         return self.read_cached('trace_clock')
     
     @trace_clock.setter
-    def trace_clock(self, clock:str):
+    def trace_clock(self, clock: str) -> None:
         self.write_cached('trace_clock', clock)
 
     @property
@@ -593,7 +593,7 @@ class Ftrace:
         return self.trace_path.joinpath('options/irq-info').read_text()[0] != 0
         
     @irq_info.setter
-    def irq_info(self, enable:bool):
+    def irq_info(self, enable: bool) -> None:
         self.set_bool('options/irq-info', enable)       
 
     def open_trace_pipe(self, is_async: bool = False) -> io.BufferedReader:
@@ -839,7 +839,7 @@ class Ftrace:
             return '' if v[0] == '#' else v
 
         @trigger.setter
-        def trigger(self, v:str):
+        def trigger(self, v: str) -> None:
             v = v or ''
 
             old_trigger = self.trigger
@@ -858,7 +858,7 @@ class Ftrace:
             return self.__read('filter').strip()
         
         @filter.setter
-        def filter(self, v):
+        def filter(self, v: str) -> None:
             self.__write('filter', v)
 
     class KprobeEvent(Event):
