@@ -35,6 +35,7 @@ class IntelPTRecorder(Recorder):
         self.record_proc:Optional[subprocess.Popen[bytes]] = None
         self.record_proc_terminated = False
         self.tmp_path = pathlib.Path(tmp_path)
+        self.my_tmp_path: Optional[pathlib.Path] = None
         self.sorted_occurrence_filter = sorted(self.occurrences_filter) if self.occurrences_filter else None
 
         error_pattern = r'^ERROR: (?P<error>.*)$'
@@ -67,11 +68,12 @@ class IntelPTRecorder(Recorder):
 
         e = {'err': err, 'syscall_nr': syscall, 'pid': pid, 'ts': event.ts/1e9}
 
-        try:
-            self.record_proc.send_signal(signal.SIGUSR2)
-        except ProcessLookupError:
-            pr_msg("perf process already terminated", level='WARN')
-            self.dump_filenames = []
+        if self.record_proc is not None:
+            try:
+                self.record_proc.send_signal(signal.SIGUSR2)
+            except ProcessLookupError:
+                pr_msg("perf process already terminated", level='WARN')
+                self.dump_filenames = []
             return
 
         # Snapshots do not work well with Intel PT, and since the parent might already have
@@ -106,6 +108,7 @@ class IntelPTRecorder(Recorder):
                     f'--snapshot=e{self.snapshot_size}',
                     f'-m,{(self.snapshot_size >> 12)}']
 
+        assert self.my_tmp_path is not None, "my_tmp_path must be initialized"
         record_args_raw.append(f'-o{self.my_tmp_path.joinpath("perf.data")}')
         
         record_args = [arg for arg in record_args_raw if arg is not None]
@@ -159,7 +162,7 @@ class IntelPTRecorder(Recorder):
         # There is a bug in bcc that causes a warning to be printed to stderr
         syscall_name = SYSCALL_NAMES.get(self.syscall_filter, None)
 
-        b = BPF(src_file="syscall_failure_ebpf.c",
+        b = BPF(src_file="syscall_failure_ebpf.c",  # type: ignore
                 cflags=["-w", "-Wno-error", "-Wno-warning"],
                 debug=DEBUG_SOURCE if self.debug else 0)
 
@@ -188,7 +191,7 @@ class IntelPTRecorder(Recorder):
         for key, value in config_map.items():
             b["config_map"][ctypes.c_ulonglong(key)] = create_ulonglong(value)
 
-        b.attach_tracepoint(tp=tp, fn_name="trace_syscalls")
+        b.attach_tracepoint(tp=tp, fn_name="trace_syscalls")  # type: ignore
         b["syscall_events"].open_perf_buffer(self.handle_event)
         self.bpf = b
 
@@ -239,6 +242,7 @@ class IntelPTRecorder(Recorder):
             return 0
 
         self.prepare_bpf()
+        assert self.monitored_pid is not None, "monitored_pid must be set"
         self.run_perf_record(self.monitored_pid)
 
         assert self.record_proc is not None
@@ -250,6 +254,7 @@ class IntelPTRecorder(Recorder):
                 self.bpf.perf_buffer_poll(1)
                 time.sleep(0.001)
                 try:
+                    assert self.monitored_pid is not None, "monitored_pid must be set"
                     terminated_pid, _ = os.waitpid(self.monitored_pid, os.WNOHANG)
                     if terminated_pid == self.monitored_pid:
                         pr_msg(f'Child process {terminated_pid} terminated', level='INFO')
@@ -259,7 +264,7 @@ class IntelPTRecorder(Recorder):
         except KeyboardInterrupt:
             pr_msg("Interrupted - stop recording", level='INFO')
 
-        if psutil.pid_exists(self.monitored_pid):
+        if self.monitored_pid is not None and psutil.pid_exists(self.monitored_pid):
             try:
                 os.kill(self.monitored_pid, signal.SIGINT)
             except ProcessLookupError:

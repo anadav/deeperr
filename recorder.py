@@ -53,6 +53,7 @@ class Recorder:
         self.traces: List[Union[List[Dict[str, Union[int, str, float]]], str]] = []
         self.save_kcore = save_kcore
         self.early_stop = early_stop
+        self.monitored_pid: Optional[int] = None
 
         pr_msg('init kallsyms...', level='OP')
         self.rename_old_res_file(self.output)
