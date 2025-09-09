@@ -1,6 +1,6 @@
 # Copyright 2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
-from typing import Optional, Set, List, Dict, Tuple, Any, Union, List
+from typing import Optional, Set, List, Dict, Tuple, Any, Union
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
@@ -73,7 +73,7 @@ class IntelPTReporter(Reporter):
                 continue
             
             match = Ftrace.err_exit_regex.match(string)
-            if False and match:
+            if False and match:  # Disabled - syscall exits not in Intel PT trace
                 d = match.groupdict()
                 d['time'] = float(d['time'])
                 d['pid'] = int(d['pid'])
@@ -112,11 +112,22 @@ class IntelPTReporter(Reporter):
                         'syscall_args': args
                     })
                 else:
+                    # Syscall exit - parse error code
+                    errcode = None
+                    if d.get('err'):
+                        errcode = int(d['err'], 16)
+                    elif d.get('err2'):
+                        errcode = int(d['err2'], 16)
+                    
                     r.update({
-                        'errcode': int(d['err'], 16) if d['err'] else int(d['err2'], 16),
+                        'errcode': errcode,
                         'syscall_nr': (int(d['syscall_exit_nr']) if d['syscall_exit_nr']
                                         else SyscallInfo.get_syscall_nr(d['syscall_exit_name']))
                     })
+                    
+                    # Debug log when we find a syscall_exit
+                    pr_msg(f'Found syscall_exit: pid={r["pid"]}, errcode={errcode}, syscall_nr={r.get("syscall_nr")}', level='DEBUG')
+                        
                 results.append(r)
                 continue
 
@@ -144,28 +155,29 @@ class IntelPTReporter(Reporter):
         # Flatten the list of results and bpf_perf_event_output_indices
         results = [result for batch in batch_results for result in batch[0]]
         bpf_perf_event_output_indices = [index for batch in batch_results for index in batch[1]]
-        exit_event_indices = [index for batch in batch_results for index in batch[2]]
+        # exit_event_indices not used for Intel PT - no syscall exits in trace
 
         failures = []
+        
+        pr_msg(f'Found {len(bpf_perf_event_output_indices)} bpf_perf_event_output calls', level='DEBUG')
+        
+        # For Intel PT, we don't have syscall exit events with error codes
+        # Instead, we use the bpf_perf_event_output as the failure marker
+        # and rely on the errcode passed from the recording phase
         for index in bpf_perf_event_output_indices:
             pid = results[index]['pid']
-            match = None
-            for exit_index in exit_event_indices:
-                if exit_index > index and results[exit_index].get('pid') == pid:
-                    match = exit_index
-                    break
-
+            
+            # For Intel PT, we don't try to find syscall exits
+            # We just mark this as a failure point and will work backwards from here
             failure = {'index': index, 'pid': pid}
-            if match is None:
-                # TODO: reenable
-                if False and errcode is None:
-                    pr_msg('found a failure, but no data on the error code', level='ERROR')
-                    continue
+            
+            # Use the errcode passed to parse_trace (if any)
+            # In practice, this might come from the failures data recorded during the record phase
+            if errcode is not None:
                 failure['errcode'] = errcode
+                failures.append(failure)
             else:
-                failure['errcode'] = results[match]['errcode']
-                failure['syscall'] = results[match]['syscall_exit_nr']
-            failures.append(failure)
+                pr_msg(f'Found failure marker at index {index} for pid {pid}, but no errcode available', level='DEBUG')
 
         return results, failures
 
@@ -178,7 +190,7 @@ class IntelPTReporter(Reporter):
         if entry.get('from_sym') not in arch.irq_exit_sym_names:
             return False
         insn = self.angr_mgr.get_insn(entry['from_ip'])
-        return insn and arch.is_iret_insn(insn)
+        return bool(insn and arch.is_iret_insn(insn))
 
     def is_syscall_entry(self, entry:Dict[str, Any]) -> bool:
         # TODO: move to arch-specific code
@@ -195,6 +207,7 @@ class IntelPTReporter(Reporter):
 
         # TODO: coorelate the trace with the failure
         for failure in self.failures:
+            pr_msg(f"Processing failure from recording: {failure}", level='DEBUG')
             for i_trace, trace in enumerate(self.traces):
                 # Although we have a timestamp on the failure that we collected using eBPF,
                 # it is using a different time source than perf, so we have no reasonable way
@@ -207,20 +220,30 @@ class IntelPTReporter(Reporter):
 
                 trace_entries = trace.splitlines()
 
-                parsed, trace_failures = self.parse_trace(trace_entries)
+                # Pass the failure's error code to parse_trace
+                failure_errcode = failure.get('err', failure.get('errcode'))
+                parsed, trace_failures = self.parse_trace(trace_entries, errcode=failure_errcode)
 
                 #failures = self.get_errors(trace_entries)
+                
+                pr_msg(f'parse_trace returned {len(trace_failures)} failures', level='DEBUG')
 
                 if len(trace_failures) == 0:
                     pr_msg('found no failures in trace', level='INFO')
                     continue
 
                 for trace_failure in trace_failures:
+                    pr_msg(f"Processing trace_failure: {trace_failure}", level='DEBUG')
                     failure_entries = parsed[:trace_failure['index']]
-                    failure_errcode = failure['err']
-                    failure_syscall = failure['syscall_nr']
+                    failure_errcode = trace_failure.get('errcode')
+                    failure_syscall = trace_failure.get('syscall', 0)
+                    
+                    # Skip if we don't have an error code
+                    if failure_errcode is None:
+                        pr_msg(f'Skipping failure without error code: {trace_failure}', level='INFO')
+                        continue
 
-                    failure_entries = [e for e in failure_entries if e is not None and e['pid'] == failure['pid']]
+                    failure_entries = [e for e in failure_entries if e is not None and e['pid'] == trace_failure['pid']]
 
                     # Remove any entries in which the from_sym or to_sym is None
                     failure_entries = [e for e in failure_entries
@@ -340,7 +363,6 @@ class IntelPTReporter(Reporter):
             from_sym = entry.get('from_sym', '')
             to_sym = entry.get('to_sym', '')
             from_ip = entry.get('from_ip', 0)
-            to_ip = entry.get('to_ip', 0)
             is_untracked_target = is_untracked_sym(to_sym)
 
             # Skip all fentry until return.
@@ -351,7 +373,7 @@ class IntelPTReporter(Reporter):
                         insn = self.angr_mgr.get_insn(from_ip)
                     except:
                         continue
-                    if from_sym == '__fentry__' and arch.is_ret_insn(insn):
+                    if from_sym == '__fentry__' and insn and arch.is_ret_insn(insn):
                         in_fentry = False
                     continue
                 elif to_sym == '__fentry__':
@@ -451,6 +473,7 @@ class IntelPTReporter(Reporter):
         # We still need to get rid of all unemulated code at the beginning of the trace.
         # As a hueristic, which might only fit x86-64, we will look for a call from
         # the entry point.
+        found_insn = None
         for i in range(enter_entry_idx, exit_entry_idx):
             insn = self.angr_mgr.get_insn(entries[i][1]['from_ip'])
             if insn is None or not arch.is_call_insn(insn):
@@ -458,17 +481,18 @@ class IntelPTReporter(Reporter):
             if entries[i][1]['from_sym'] not in arch.syscall_entry_points:
                 continue
             to_sym = self.angr_mgr.get_sym(entries[i][1]['to_ip'])
-            if self.angr_mgr.is_ignored_sym(to_sym):
+            if to_sym and self.angr_mgr.is_ignored_sym(to_sym):
                 continue
+            found_insn = insn
             break
         
         enter_entry_idx = i
-        if enter_entry_idx == exit_entry_idx:
+        if enter_entry_idx == exit_entry_idx or found_insn is None:
             return None
         
         # Cut the end of the trace to the return address of the first call.
         # This is a heuristic that might not work for all architectures.
-        expected_ret_addr = self.angr_mgr.next_insn_addr(insn)
+        expected_ret_addr = self.angr_mgr.next_insn_addr(found_insn)
         for i in range(exit_entry_idx, enter_entry_idx, -1):
             if entries[i][1]['to_ip'] == expected_ret_addr:
                 break
@@ -496,7 +520,7 @@ class IntelPTReporter(Reporter):
 
         parsed = [(n, self.parse_trace_entry(trace[n])) for n in line_nums]
 
-        for line_num, syscall_info in parsed:
+        for _, syscall_info in parsed:
             assert syscall_info is not None
 
             syscall_type = syscall_info["type"]
@@ -538,19 +562,19 @@ class IntelPTReporter(Reporter):
         # and rets.
         tracked_branches = list()
         nesting_level = 0
-        callee_address, callee_sym, ret_to_ip = None, None, None
+        callee_address, ret_to_ip = None, None
         for b in Pbar("clean trace", branches):
             from_ip, to_ip = b['from_ip'], b['to_ip']
             to_sym = to_ip and self.angr_mgr.get_sym(to_ip)
             from_insn = self.angr_mgr.get_insn(from_ip)
 
             if nesting_level == 0:
-                if not arch.is_call_insn(from_insn):
+                if from_insn is None or not arch.is_call_insn(from_insn):
                     tracked_branches.append(b)
                     continue
                 
                 # TODO: Do we want to check if the entire symbol is hooked?
-                if not to_sym or self.angr_mgr.is_ignored_sym(to_sym) or self.angr_mgr.proj.is_hooked(to_ip):
+                if not to_sym or self.angr_mgr.is_ignored_sym(to_sym) or (to_ip and self.angr_mgr.proj.is_hooked(to_ip)):
                     callee_address = to_ip
                     ret_to_ip = self.angr_mgr.next_insn_addr(from_ip)
                     nesting_level = 1
