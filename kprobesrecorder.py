@@ -49,9 +49,9 @@ class KProbesRecorder(Recorder):
         'fortify_panic',
     }
 
-    def __init__(self, **kwargs) -> None:
-        self.pending_signals = defaultdict(deque)
-        self.kprobes = dict()
+    def __init__(self, **kwargs: Any) -> None:
+        self.pending_signals: defaultdict[int, deque[int]] = defaultdict(deque)
+        self.kprobes: Dict[Tuple[int, bool], Any] = dict()
 
         kwargs.pop('tmp_path', None)
         kwargs['kcore'] = Kcore()

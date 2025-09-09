@@ -51,7 +51,7 @@ class Recorder:
         self.occurrences_filter = occurrences_filter
         self.occurrences = 0
         self.debug = debug
-        self.traces: List[Union[List[Dict[str, Union[int, str, float]]], str]] = []
+        self.traces: List[Union[List[Dict[str, Union[int, str, float, List[Any]]]], str]] = []
         self.save_kcore = save_kcore
         self.early_stop = early_stop
         self.monitored_pid: Optional[int] = None
