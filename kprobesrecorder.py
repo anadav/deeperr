@@ -6,7 +6,9 @@ from collections import deque, defaultdict
 
 import ptrace
 from ptrace.debugger.process import PtraceProcess
+from ptrace.debugger import ProcessExit, ProcessSignal, NewProcessEvent, ProcessExecution
 from ptrace.syscall.ptrace_syscall import PtraceSyscall
+from ptrace.func_call import FunctionCallOptions
 
 from arch import arch
 from cle.backends.symbol import Symbol
@@ -91,6 +93,7 @@ class KProbesRecorder(Recorder):
         # symbols with the same name.
         assert self.angr_mgr is not None
         target_sym = self.angr_mgr.get_sym('_stext')
+        assert target_sym is not None
         offset = addr - target_sym.rebased_addr
         assert offset >= 0
 
@@ -253,7 +256,7 @@ class KProbesRecorder(Recorder):
         ftrace.func_stack_trace = False
         ftrace.pid = []
         ftrace.event_pid = []
-        sys_exit_event.trigger = None
+        sys_exit_event.trigger = None  # type: ignore[assignment]  # Clearing trigger, expects str but None is valid for cleanup
         
         return len(self.failures)
 
@@ -337,7 +340,7 @@ class KProbesRecorder(Recorder):
                             sim_syms: Iterable[Symbol]) -> None:
         failure = {
             'syscall': syscall.syscall,
-            'errcode': -syscall.result,
+            'errcode': -syscall.result,  # type: ignore[operator]  # syscall.result is int, but type checker doesn't know
             'trace_id': len(self.traces),
             'pid': pid,
             'probe_addrs': probe_addrs,
@@ -348,7 +351,7 @@ class KProbesRecorder(Recorder):
 
             # TODO: delete some more useless stuff
 
-        self.traces.append(trace) # type: ignore
+        self.traces.append(trace)
         self.failures.append(failure)
 
     def rerun_get_snapshot(self, process: PtraceProcess, failing_syscall: PtraceSyscall) -> List[Dict[str, Any]]:
@@ -369,12 +372,13 @@ class KProbesRecorder(Recorder):
         return s
     
     def cleanup_callstack(self, trace: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        addr_to_sym:Dict[int, Symbol] = dict()
+        addr_to_sym: Dict[int, Optional[Symbol]] = dict()
 
         def get_sym(addr: int) -> Optional[Symbol]:
             if addr in addr_to_sym:
                 return addr_to_sym[addr]
             
+            assert self.angr_mgr is not None
             try:
                 sym = self.angr_mgr.get_sym(addr)
             except ValueError:
@@ -382,8 +386,8 @@ class KProbesRecorder(Recorder):
             addr_to_sym[addr] = sym
             return sym
 
-        last_callstack:List[int] = list()
-        last_callstack_syms:List[Symbol] = list()
+        last_callstack: List[int] = list()
+        last_callstack_syms: List[Optional[Symbol]] = list()
 
         for l in Pbar("finding symbols", items=trace):
             callstack_syms = []
@@ -442,7 +446,7 @@ class KProbesRecorder(Recorder):
                     signum = self.pending_signals[p.pid].popleft()
                 try:
                     p.syscall(signum)
-                except (ptrace.debugger.ProcessExit, ptrace.PtraceError) as exc:
+                except (ProcessExit, ptrace.PtraceError) as exc:
                     pr_msg(f"error waiting for syscall failure {exc}", level="WARN")
 
             signum = 0
@@ -454,19 +458,19 @@ class KProbesRecorder(Recorder):
                 e = self.dbg.waitSyscall()
                 is_syscall = True
                 trapped_process = e.process
-            except ptrace.debugger.ProcessExit as e:
+            except ProcessExit as e:
                 e.process.processExited(e)  # type: ignore[attr-defined]
-                trapped_process = e.process
-            except ptrace.debugger.ProcessSignal as e:
-                self.pending_signals[e.process.pid].append(e.signum)
-                trapped_process = e.process
-            except ptrace.debugger.NewProcessEvent as e:
-                e.process.parent.is_stopped = True
-                trapped_process = e.process
-            except ptrace.debugger.ProcessExecution as e:
+                trapped_process = e.process  # type: ignore[attr-defined]
+            except ProcessSignal as e:
+                self.pending_signals[e.process.pid].append(e.signum)  # type: ignore[attr-defined]
+                trapped_process = e.process  # type: ignore[attr-defined]
+            except NewProcessEvent as e:
+                e.process.parent.is_stopped = True  # type: ignore[attr-defined]
+                trapped_process = e.process  # type: ignore[attr-defined]
+            except ProcessExecution as e:
                 # It should have been marked as stopped, but it is not
-                e.process.is_stopped = True
-                trapped_process = e.process
+                e.process.is_stopped = True  # type: ignore[attr-defined]
+                trapped_process = e.process  # type: ignore[attr-defined]
 
             if not is_syscall:
                 continue
@@ -477,13 +481,13 @@ class KProbesRecorder(Recorder):
                 continue
             
             try:
-                syscall = trapped_process.syscall_state.event(ptrace.func_call.FunctionCallOptions())
-            except (ptrace.debugger.ProcessExit, ptrace.PtraceError) as exc:
+                syscall: Optional[PtraceSyscall] = trapped_process.syscall_state.event(FunctionCallOptions())
+            except (ProcessExit, ptrace.PtraceError) as exc:
                 pr_msg(f'error getting syscall info: {exc}', level='WARN')
                 continue
 
             # For syscall entry, the result is None
-            if syscall.result is None:
+            if syscall is None or syscall.result is None:
                 continue
 
             # On reproduction, process is not None and we do not care about the
