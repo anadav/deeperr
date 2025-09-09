@@ -316,19 +316,27 @@ class AngrSim:
         return not_taken
 
     def backtrack_step_func(self, simgr: SimulationManager) -> SimulationManager:
-        simgr = simgr.step(selector_func = self.is_skipped_code,
+        result = simgr.step(selector_func = self.is_skipped_code,
                             target_stash = 'tmp',
                             procedure = Angr.step_func_proc_trace)
+        assert result is not None
+        simgr = result
                             
-        simgr = simgr.step(stash = 'unconstrained',
+        result = simgr.step(stash = 'unconstrained',
                             target_stash = 'tmp',
                             selector_func = self.is_unconstrained_call_target_no_follow,
                             procedure = Angr.step_func_proc_trace)
+        assert result is not None
+        simgr = result
         
         if 'tmp' in simgr.stashes:
-            simgr = simgr.move(from_stash = 'tmp', to_stash = 'active')
+            result = simgr.move(from_stash = 'tmp', to_stash = 'active')
+            assert result is not None
+            simgr = result
         
-        simgr = simgr.apply(state_func=self.update_state_max_depth)
+        result = simgr.apply(state_func=self.update_state_max_depth)
+        assert result is not None
+        simgr = result
         return simgr
 
     def step_func(self, simgr: SimulationManager) -> SimulationManager:
@@ -336,8 +344,12 @@ class AngrSim:
 
         self.move_to_diverged()
 
-        simgr = simgr.apply(state_func=self.update_state_max_depth, stash='active')
-        simgr = simgr.apply(state_func=self.warn_potential_simulation_problem, stash='active')
+        result = simgr.apply(state_func=self.update_state_max_depth, stash='active')
+        assert result is not None
+        simgr = result
+        result = simgr.apply(state_func=self.warn_potential_simulation_problem, stash='active')
+        assert result is not None
+        simgr = result
         return simgr
 
 
@@ -485,12 +497,18 @@ class AngrSim:
         #self.constrain_calls()
         simgr.move('active', 'skipped', lambda x: self.is_skipped_code(x))
         
-        simgr = simgr.step(num_inst = 1)
+        result = simgr.step(num_inst = 1)
+        if result is None:
+            raise RuntimeError("Simulation step returned None")
+        simgr = result
 
-        simgr = simgr.step(stash = 'skipped',
+        result = simgr.step(stash = 'skipped',
                            target_stash = 'active',
                            procedure = Angr.step_func_proc_trace,
                            num_inst = 1)
+        if result is None:
+            raise RuntimeError("Simulation step returned None")
+        simgr = result
 
         # TODO: just get rid of step_func
         if self.simgr is not None:

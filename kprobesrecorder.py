@@ -388,7 +388,8 @@ class KProbesRecorder(Recorder):
         last_callstack_syms: List[Optional[Symbol]] = list()
 
         for l in Pbar("finding symbols", items=trace):
-            callstack_syms = []
+            callstack_syms: List[Optional[Symbol]] = []
+            callstack: List[int] = []
             if 'to_ip' not in l or l.get('type') != 'func':
                 continue
             to_sym = get_sym(l['to_ip'])
@@ -455,13 +456,13 @@ class KProbesRecorder(Recorder):
             try:
                 e = self.dbg.waitSyscall()
                 is_syscall = True
-                trapped_process = e.process
+                trapped_process = e.process if e is not None else process_filter[0]
             except ProcessExit as e:
                 e.process.processExited(e)  # type: ignore[attr-defined]
                 trapped_process = e.process  # type: ignore[attr-defined]
             except ProcessSignal as e:
                 self.pending_signals[e.process.pid].append(e.signum)  # type: ignore[attr-defined]
-                trapped_process = e.process  # type: ignore[attr-defined]
+                trapped_process = e.process
             except NewProcessEvent as e:
                 e.process.parent.is_stopped = True  # type: ignore[attr-defined]
                 trapped_process = e.process  # type: ignore[attr-defined]
