@@ -267,9 +267,11 @@ class ArchX86(Arch):
             r = flags & cond[0] == 0
             return r if cond[1] else not r
         if id in self.cx_cond_map:
-            # TODO: It just never happended and should be checked once
-            assert 0 == 1
-            return state['cx'] & self.cx_cond_map[id] != 0
+            # CX-based conditional jumps (JCXZ, JECXZ, JRCXZ) - rarely used but handle correctly
+            from prmsg import warn_once
+            warn_once(f"CX-based conditional jump {insn.mnemonic} encountered")
+            # Check if CX register (masked to the appropriate size) is zero
+            return (state.get('cx', 0) & self.cx_cond_map[id]) == 0
         if id == capstone.x86.X86_INS_JGE:
             return flags_equal(flags, self.X86_EFLAGS_SF, self.X86_EFLAGS_OF)
         if id == capstone.x86.X86_INS_JG:
