@@ -101,7 +101,7 @@ class Reporter(metaclass=abc.ABCMeta):
         return [ip for ip in prev_ips if ip is not None]
 
     def report_one_fallback(self,
-                            branches: List[Dict[str, Union[int, Dict[str, int], None, List[int]]]],
+                            branches: List[Dict[str, Any]],
                             errcode: int,
                             order: List[Tuple[int, int]],
         ) -> bool:
@@ -129,7 +129,7 @@ class Reporter(metaclass=abc.ABCMeta):
         return True
 
     def report_one(self,
-                   branches: List[Dict[str, Union[int, Dict[str, int], None, List[int]]]],
+                   branches: List[Dict[str, Any]],
                    errcode: int,
                    sim_syms: Optional[Set[Symbol]] = None,
                    simulate_all: bool = False,
@@ -223,7 +223,10 @@ class Reporter(metaclass=abc.ABCMeta):
         addr2line = Addr2Line.get_instance()
 
         addr_to_base = {a: self.angr_mgr.base_addr(a) for a in callstack}
-        base_lines_dict = addr2line.run(addr_to_base.values())
+        if addr2line is None:
+            base_lines_dict = {}
+        else:
+            base_lines_dict = addr2line.run(list(addr_to_base.values()))
 
         # change absolute paths to relative paths
         for locs in base_lines_dict.values():
@@ -353,8 +356,8 @@ class Reporter(metaclass=abc.ABCMeta):
                     bin_loc, fileline, funcname, failure_pointer), level='DATA')
 
     def get_analysis_order(self,
-                           branches: List[Dict],
-                           errcode: Optional[int]) -> List[Tuple[int,int]]:
+                           branches: List[Dict[str, Any]],
+                           errcode: Optional[int]) -> List[Tuple[int, int]]:
         tree:Dict[str, Union[List, int, bool]] = {'children': [], 'start': 0, 'end': len(branches), 'root': True}
         n:Dict[str, Any]
         cur = tree

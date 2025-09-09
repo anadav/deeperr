@@ -52,7 +52,7 @@ def report(inputs: str,
            objs: List[io.BufferedReader],
            syscall_filter: Optional[int],
            errcode_filter: Optional[int],
-           occurances_filter: Optional[Set[int]],
+           occurrences_filter: Optional[Set[int]],
            **kwargs):
     if output is not None:
         try:
@@ -103,9 +103,9 @@ def report(inputs: str,
             'errcode_filter': errcode_filter,
             'syscall_filter': syscall_filter,
             'print_stats': print_stats,
-            # Filtering based on occurances is done during reporting only for Intel PT,
+            # Filtering based on occurrences is done during reporting only for Intel PT,
             # since we cannot reliably filter it out during recording
-            'occurances_filter': occurances_filter,
+            'occurrences_filter': occurrences_filter,
             'angr_mgr': angr_mgr,
             'traces': data['traces'],
             'failures': data['failures'],
@@ -450,7 +450,7 @@ def main():
                objs=objs,
                errcode_filter=errcode_filter,
                syscall_filter=syscall_filter,
-               occurances_filter=occurrences_filter,
+               occurrences_filter=occurrences_filter,
                src_path=args.src_path)
 
 if __name__ == "__main__":
