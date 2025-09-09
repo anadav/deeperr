@@ -14,7 +14,7 @@ from ftrace import Ftrace
 from angrmgr import Angr
 from angrsim import AngrSim
 from arch import arch
-from cle.backends import Symbol
+from cle.backends.symbol import Symbol
 from prmsg import pr_msg, uptime, is_terminal_output
 from addr2line import Addr2Line
 
@@ -23,7 +23,7 @@ class Reporter(metaclass=abc.ABCMeta):
                  objs: List[io.BufferedReader],
                  syscall_filter: Optional[int],
                  errcode_filter: Optional[int],
-                 occurances_filter: Optional[Set[int]],
+                 occurrences_filter: Optional[Set[int]],
                  angr_mgr: Angr,
                  print_stats: bool,
                  failures: List[Dict[str, Any]],
@@ -33,7 +33,7 @@ class Reporter(metaclass=abc.ABCMeta):
         self.objs = objs
         self.syscall_filter = syscall_filter
         self.errcode_filter = errcode_filter
-        self.occurances_filter = occurances_filter
+        self.occurrences_filter = occurrences_filter
         self.failures = failures
         self.angr_mgr = angr_mgr
         self.print_stats = print_stats
@@ -41,15 +41,15 @@ class Reporter(metaclass=abc.ABCMeta):
         self.src_path = src_path and pathlib.Path(src_path)
 
     @abc.abstractmethod
-    def report(self):
+    def report(self) -> None:
         pass
 
     @property
     @abc.abstractmethod
-    def detailed_trace(self):
+    def detailed_trace(self) -> bool:
         pass
 
-    def do_print_stats(self, errcode:int, sim_attempts:int, branches:List, sim_stats:Dict[str, Union[List, int]]):
+    def do_print_stats(self, errcode: int, sim_attempts: int, branches: List, sim_stats: Dict[str, Union[List, int]]) -> None:
         pr_msg("---", new_line_after = True, level='DATA')
         pr_msg(f"errorcode: {errcode} [{ErrorcodeInfo.get_name(errcode)}]", level='DATA')
         pr_msg(f"divergence: {sim_stats['simulation diverged']}", level='DATA')
@@ -133,7 +133,7 @@ class Reporter(metaclass=abc.ABCMeta):
                    errcode: int,
                    sim_syms: Optional[Set[Symbol]] = None,
                    simulate_all: bool = False,
-    ):
+    ) -> None:
         if self.errcode_filter and errcode != self.errcode_filter:
             return
 
@@ -249,7 +249,7 @@ class Reporter(metaclass=abc.ABCMeta):
 
         return callstack_locations
 
-    def analyze_source_callstack(self, res:Dict):
+    def analyze_source_callstack(self, res: Dict) -> None:
         callstack = res['callstack']
         failure_returning_symbol_index = res['failure returning symbol index']
         callstack_locations = self.get_callstack_locations(callstack)
@@ -288,7 +288,7 @@ class Reporter(metaclass=abc.ABCMeta):
             'source callstack': source_callstack
         })
 
-    def read_surrounding_code(self, res:Dict):
+    def read_surrounding_code(self, res: Dict) -> None:
         source_callstack = res['source callstack']
         if len(source_callstack) == 0:
             return
@@ -308,7 +308,7 @@ class Reporter(metaclass=abc.ABCMeta):
             except FileNotFoundError as e:
                 pr_msg(str(e), level='WARN', new_line_before=True)
 
-    def print_surrounding_code(self, res:Dict):
+    def print_surrounding_code(self, res: Dict) -> None:
         index_message = [(0, 'root-cause')]
 
         if res['failure returning symbol index'] != 0:
@@ -321,13 +321,13 @@ class Reporter(metaclass=abc.ABCMeta):
                 pr_msg(callstack_entry['code'], level='DATA', new_line_after=True)
                 break
 
-    def show_results(self, res:Dict):
+    def show_results(self, res: Dict) -> None:
         self.analyze_source_callstack(res)
         self.read_surrounding_code(res)
         self.print_callstack(res)
         self.print_surrounding_code(res)
 
-    def print_callstack(self, res:Dict):
+    def print_callstack(self, res: Dict) -> None:
         failure_returning_function_index = res['failure returning function index']
         pr_msg("callstack (decoding):", level="TITLE", new_line_before=True)
 
@@ -407,7 +407,7 @@ class Reporter(metaclass=abc.ABCMeta):
 
         return results
     
-    def parse_trace_entry(self, line:str) -> Optional[Dict]:
+    def parse_trace_entry(self, line: str) -> Optional[Dict]:
         """
         Parse a single entry of the trace file.
         """
@@ -443,19 +443,20 @@ class Reporter(metaclass=abc.ABCMeta):
         
         return d
 
-    def tokenize_c_code(code):
+    @staticmethod
+    def tokenize_c_code(code: str) -> List[Tuple[int, str]]:
         # Regular expression pattern to match common C tokens
         pattern = r'\b[_a-zA-Z][_a-zA-Z0-9]*\b|[-+*/%=<>!&|^~]?=|[-+*/%<>!&|^~]|\d+\.\d+|\d+|".*?"|\'.*?\'|[(){}[\],.;]'
         return [(match.start(), match.group()) for match in re.finditer(pattern, code)]
 
     @staticmethod
-    def get_tokens_around_column(code, column):
+    def get_tokens_around_column(code: str, column: int) -> Tuple[str, str, str]:
         tokens = Reporter.tokenize_c_code(code)
         before_token = ''
         current_token = ''
         after_token = ''
 
-        for i, (start, token) in enumerate(tokens):
+        for _, (start, token) in enumerate(tokens):
             if start <= column < start + len(token):
                 current_token = token
                 before_token = code[:start]
@@ -464,7 +465,7 @@ class Reporter(metaclass=abc.ABCMeta):
 
         return before_token, current_token, after_token
 
-    def extract_surrounding_code(self, line:int, col:int, file_name:str) -> Optional[str]:
+    def extract_surrounding_code(self, line: int, col: int, file_name: str) -> Optional[str]:
         if self.src_path is None:
             return None
         
