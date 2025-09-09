@@ -161,6 +161,23 @@ class ArchX86(Arch):
 
     def cs_to_pyvex_reg(self, reg:int) -> str:
         return self.cs_to_pyvex_reg_map[reg]
+    
+    @staticmethod
+    def get_register_width(reg_name: str) -> int:
+        """Get the width of a register in bits based on its name."""
+        # 8-bit registers
+        if reg_name in {'al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 
+                         'sil', 'dil', 'bpl', 'spl'}:
+            return 8
+        # 16-bit registers
+        elif reg_name in {'ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp', 'ip'}:
+            return 16
+        # 32-bit registers
+        elif reg_name.startswith('e') and len(reg_name) == 3:  # eax, ebx, etc.
+            return 32
+        # 64-bit registers (default for most registers including r8-r15)
+        else:
+            return 64
 
     @property
     def stack_size(self) -> int:
@@ -504,8 +521,9 @@ class ArchX86(Arch):
             if val is not None:
                 v = state.solver.Unconstrained("unconstrained_val", val.length)
             else:
-                v = state.solver.Unconstrained("unconstrained_val", 64)
-            # TODO: find width and create correct value
+                # Use the actual register width based on the register name
+                width = ArchX86.get_register_width(reg_name)
+                v = state.solver.Unconstrained("unconstrained_val", width)
             state.registers.store(reg_name, v)
 
     @property
