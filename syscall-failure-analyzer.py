@@ -162,9 +162,10 @@ def main():
             pr_msg(f'Install mode must be run as root', level='FATAL')
             exit(1)
     elif os.geteuid() != 0 and args.command in ['record', 'report']:
-        # Check if capabilities are set
+        # Check if capabilities are set on the real Python binary
+        real_python = os.path.realpath(sys.executable)
         try:
-            result = subprocess.run(['getcap', sys.executable], capture_output=True, text=True)
+            result = subprocess.run(['getcap', real_python], capture_output=True, text=True)
             if 'cap_sys_rawio' not in result.stdout:
                 pr_msg(f'This tool requires root privileges or proper capabilities.', level='FATAL')
                 pr_msg(f'Run "sudo {sys.executable} {__file__} install" to set up permissions.', level='INFO')
@@ -224,6 +225,58 @@ def main():
         except Exception as e:
             pr_msg(f'Failed to set perf_event_paranoid: {e}', level='ERROR')
         
+        # Set kptr_restrict to 0 to allow reading kernel addresses
+        try:
+            with open('/proc/sys/kernel/kptr_restrict', 'w') as f:
+                f.write('0')
+            pr_msg('Set /proc/sys/kernel/kptr_restrict to 0 (kernel addresses visible)', level='INFO')
+        except Exception as e:
+            pr_msg(f'Failed to set kptr_restrict: {e}', level='ERROR')
+        
+        # Make /proc/kcore readable by changing permissions temporarily
+        # This is a security risk but necessary for perf --kcore to work
+        try:
+            subprocess.run(['chmod', '444', '/proc/kcore'], check=True, capture_output=True, text=True)
+            pr_msg('Made /proc/kcore world-readable (temporary, resets on reboot)', level='INFO')
+            pr_msg('  WARNING: This reduces system security', level='WARN')
+        except subprocess.CalledProcessError as e:
+            pr_msg(f'Failed to change /proc/kcore permissions: {e.stderr}', level='ERROR')
+        
+        # Set ptrace_scope to 0 to allow ptrace
+        ptrace_scope_path = '/proc/sys/kernel/yama/ptrace_scope'
+        if os.path.exists(ptrace_scope_path):
+            try:
+                with open(ptrace_scope_path, 'w') as f:
+                    f.write('0')
+                pr_msg('Set ptrace_scope to 0 (allows ptrace)', level='INFO')
+            except Exception as e:
+                pr_msg(f'Failed to set ptrace_scope: {e}', level='ERROR')
+        
+        # Check if debugfs is mounted at /sys/kernel/debug
+        debugfs_path = '/sys/kernel/debug'
+        if not os.path.exists(os.path.join(debugfs_path, 'tracing')):
+            pr_msg('debugfs not mounted or tracing not available', level='WARN')
+            try:
+                # Try to mount debugfs
+                subprocess.run(['mount', '-t', 'debugfs', 'none', debugfs_path],
+                             check=True, capture_output=True, text=True)
+                pr_msg(f'Mounted debugfs at {debugfs_path}', level='INFO')
+            except subprocess.CalledProcessError:
+                pr_msg('Could not mount debugfs, kprobes may not work', level='WARN')
+        else:
+            pr_msg('debugfs already mounted with tracing support', level='INFO')
+        
+        # Set permissions on tracing directory
+        tracing_path = os.path.join(debugfs_path, 'tracing')
+        if os.path.exists(tracing_path):
+            try:
+                # Make tracing accessible (this might not persist across reboots)
+                subprocess.run(['chmod', '-R', 'a+rX', tracing_path],
+                             check=True, capture_output=True, text=True)
+                pr_msg(f'Set read permissions on {tracing_path}', level='INFO')
+            except subprocess.CalledProcessError as e:
+                pr_msg(f'Could not set permissions on tracing: {e.stderr}', level='WARN')
+        
         # Make it persistent across reboots
         try:
             sysctl_conf = '/etc/sysctl.d/99-syscall-analyzer.conf'
@@ -249,23 +302,99 @@ def main():
             pr_msg(f'System python3: {which_python_real}', level='INFO')
         
         # Set capabilities on the real Python executable
+        # Add cap_perfmon for perf/ftrace access, cap_bpf for BPF programs, cap_dac_override to read /proc/kcore
+        capabilities = 'cap_sys_rawio,cap_sys_admin,cap_sys_ptrace,cap_dac_read_search,cap_dac_override,cap_perfmon,cap_bpf,cap_net_admin+ep'
         try:
-            subprocess.run(['setcap', 'cap_sys_rawio,cap_sys_admin,cap_sys_ptrace,cap_dac_read_search+ep', real_python_path], 
+            subprocess.run(['setcap', capabilities, real_python_path], 
                          check=True, capture_output=True, text=True)
             pr_msg(f'Set capabilities on {real_python_path}', level='INFO')
         except subprocess.CalledProcessError as e:
             pr_msg(f'Failed to set capabilities on {real_python_path}: {e.stderr}', level='ERROR')
-            pr_msg(f'You may need to manually set capabilities on your Python binary', level='WARN')
+            # Try with a reduced set of capabilities for older kernels
+            try:
+                fallback_caps = 'cap_sys_rawio,cap_sys_admin,cap_sys_ptrace,cap_dac_read_search,cap_dac_override+ep'
+                subprocess.run(['setcap', fallback_caps, real_python_path],
+                             check=True, capture_output=True, text=True)
+                pr_msg(f'Set reduced capabilities on {real_python_path} (older kernel)', level='INFO')
+            except subprocess.CalledProcessError as e2:
+                pr_msg(f'Failed to set any capabilities: {e2.stderr}', level='ERROR')
+                pr_msg(f'You may need to manually set capabilities on your Python binary', level='WARN')
         
         # Find perf executable and set capabilities
-        perf_path = shutil.which('perf')
+        # Use the --perf argument if provided, otherwise find the default perf
+        perf_path = args.perf if args.perf != 'perf' else shutil.which('perf')
+        
         if perf_path:
-            try:
-                subprocess.run(['setcap', 'cap_sys_admin,cap_sys_ptrace,cap_syslog+ep', perf_path],
-                             check=True, capture_output=True, text=True)
-                pr_msg(f'Set capabilities on {perf_path}', level='INFO')
-            except subprocess.CalledProcessError as e:
-                pr_msg(f'Failed to set capabilities on perf: {e.stderr}', level='ERROR')
+            # Check if perf_path is a wrapper script and find the real binary
+            real_perf_paths = []
+            
+            # Check if it's the standard Ubuntu perf wrapper
+            if os.path.isfile(perf_path):
+                with open(perf_path, 'r') as f:
+                    first_line = f.readline()
+                    if first_line.startswith('#!/bin/bash'):
+                        # It's likely a wrapper script, find the real perf binary
+                        import platform
+                        kernel_version = platform.release()
+                        
+                        # Try standard Ubuntu locations
+                        possible_paths = [
+                            f'/usr/lib/linux-tools/{kernel_version}/perf',
+                            f'/usr/lib/linux-tools-{kernel_version}/perf',
+                        ]
+                        
+                        # Also check what the wrapper would execute
+                        for path in possible_paths:
+                            if os.path.exists(path):
+                                # Resolve any symlinks
+                                real_path = os.path.realpath(path)
+                                if os.path.exists(real_path):
+                                    real_perf_paths.append(real_path)
+                        
+                        # Also add the wrapper itself
+                        real_perf_paths.append(perf_path)
+                    else:
+                        # It's the actual binary
+                        real_perf_paths = [perf_path]
+            else:
+                real_perf_paths = [perf_path]
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_perf_paths = []
+            for path in real_perf_paths:
+                if path not in seen:
+                    seen.add(path)
+                    unique_perf_paths.append(path)
+            
+            for perf_binary in unique_perf_paths:
+                try:
+                    # Skip if it's a script
+                    if os.path.isfile(perf_binary):
+                        with open(perf_binary, 'rb') as f:
+                            # Check if it's an ELF binary (starts with magic bytes)
+                            magic = f.read(4)
+                            if magic != b'\x7fELF':
+                                pr_msg(f'Skipping {perf_binary} (not an ELF binary)', level='INFO')
+                                continue
+                    
+                    # perf needs cap_sys_rawio and cap_dac_override to read /proc/kcore, cap_perfmon for performance monitoring
+                    perf_caps = 'cap_sys_rawio,cap_sys_admin,cap_sys_ptrace,cap_syslog,cap_dac_override,cap_perfmon,cap_ipc_lock+ep'
+                    subprocess.run(['setcap', perf_caps, perf_binary],
+                                 check=True, capture_output=True, text=True)
+                    pr_msg(f'Set capabilities on {perf_binary}', level='INFO')
+                except subprocess.CalledProcessError as e:
+                    pr_msg(f'Failed to set capabilities on {perf_binary}: {e.stderr}', level='ERROR')
+                    # Try with reduced capabilities for older kernels
+                    try:
+                        fallback_perf_caps = 'cap_sys_rawio,cap_sys_admin,cap_sys_ptrace,cap_syslog,cap_dac_override+ep'
+                        subprocess.run(['setcap', fallback_perf_caps, perf_binary],
+                                     check=True, capture_output=True, text=True)
+                        pr_msg(f'Set reduced capabilities on {perf_binary} (older kernel)', level='INFO')
+                    except subprocess.CalledProcessError as e2:
+                        pr_msg(f'Failed to set any capabilities on {perf_binary}: {e2.stderr}', level='ERROR')
+                except Exception as e:
+                    pr_msg(f'Error processing {perf_binary}: {e}', level='ERROR')
         else:
             pr_msg('perf not found in PATH', level='WARN')
         

@@ -179,7 +179,7 @@ class IntelPTRecorder(Recorder):
         # Create a dictionary to store config
         config_map = {
             SYSCALL_FILTER_KEY: self.syscall_filter,
-            ERRCODE_FILTER_KEY: -self.errcode_filter if self.errcode_filter is not None else None,
+            ERRCODE_FILTER_KEY: self.errcode_filter if self.errcode_filter is not None else None,
             MONITORED_PID_KEY: self.monitored_pid,
             SORTED_OCCURRENCE_FILTER_KEY: self.sorted_occurrence_filter[0] if self.sorted_occurrence_filter else None,
             FLAGS_KEY: 1 if self.early_stop else 0
