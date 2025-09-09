@@ -273,6 +273,15 @@ class Kallsyms:
     def __read_vmlinux_syms(self, obj_basenames:Dict[str, io.BufferedReader]): 
         path = obj_basenames['vmlinux'].name if 'vmlinux' in obj_basenames else None
 
+        if path is None:
+            pr_msg(f'Could not find vmlinux file, continuing without kernel symbols', level='WARNING')
+            pr_msg(f'Consider installing symbols using:', level='INFO')
+            pr_msg(f'    sudo apt install linux-image-$(uname -r)-dbgsym [deb/ubuntu]', level='INFO')
+            pr_msg(f'    sudo dnf debuginfo-install kernel [fedora]', level='INFO')
+            pr_msg(f'    sudo pacman -S linux-headers [arch]', level='INFO')
+            pr_msg(f'    sudo emerge -av sys-kernel/linux-headers [gentoo]', level='INFO')
+            return
+
         remapped_base = None
         with open('/proc/kcore', 'rb') as f:
             elffile = ELFFile(f)
@@ -285,10 +294,6 @@ class Kallsyms:
         if remapped_base is None:
             pr_msg(f"Could not find remapped base address for vmlinux", level='ERROR')
             raise Exception(f"Could not find remapped base address for vmlinux")
-
-        if path is None:
-            pr_msg(f'Could not find vmlinux file', level='ERROR')
-            raise FileNotFoundError(f'Could not find vmlinux file')
 
         binary = lief.ELF.parse(path)
         if binary is None:
