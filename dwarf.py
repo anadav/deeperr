@@ -15,34 +15,37 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ELFDWARFAnalyzer:
-    def __init__(self, filename: str):
+    def __init__(self, filename: str) -> None:
         self.filename = filename
-        self.elffile = None
-        self.dwarfinfo:Optional[DWARFInfo] = None
-        self._aranges:Optional[ARanges] = None
+        self.elffile: Optional[ELFFile] = None
+        self.dwarfinfo: Optional[DWARFInfo] = None
+        self._aranges: Optional[ARanges] = None
 
-    def __enter__(self):
+    def __enter__(self) -> 'ELFDWARFAnalyzer':
         self.elffile = ELFFile(open(self.filename, 'rb'))
         self.dwarfinfo = self.elffile.get_dwarf_info()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        _ = exc_type, exc_val, exc_tb  # Unused but required for context manager protocol
         self._aranges = None
-        if self.elffile:
+        if self.elffile and hasattr(self.elffile, 'stream'):
             self.elffile.stream.close()
 
-    def find_cu_by_address(self, address: int) -> Optional[Any]:
+    def find_cu_by_address(self, address: int) -> Optional[CompileUnit]:
         """Find the Compilation Unit (CU) containing the given address."""
         if self.dwarfinfo is None:
             raise DWARFError("DWARF info not loaded")
         if self._aranges is None:
             self._aranges = self.dwarfinfo.get_aranges()
+        if self._aranges is None:
+            return None
         cu_offset = self._aranges.cu_offset_at_addr(address)
         if cu_offset is not None:
             return self.dwarfinfo.get_CU_at(cu_offset)
         return None
 
-    def get_referenced_die(self, cu: Any, attr: Any) -> Optional[DIE]:
+    def get_referenced_die(self, cu: CompileUnit, attr: Any) -> Optional[DIE]:
         """Get the DIE referenced by an attribute."""
         if self.dwarfinfo is None:
             raise DWARFError("DWARF info not loaded")
@@ -54,7 +57,7 @@ class ELFDWARFAnalyzer:
                 return self.dwarfinfo.get_DIE_from_refaddr(attr.value)
         raise DWARFError(f"Unsupported reference form: {attr.form}")
 
-    def resolve_type(self, die: DIE, prefix: str = "", is_type = False, depth: int = 0) -> str:
+    def resolve_type(self, die: DIE, prefix: str = "", is_type: bool = False, depth: int = 0) -> str:
         """Resolve the type name of a DIE."""
         if depth > 10:
             return "<max depth reached>"
@@ -65,12 +68,16 @@ class ELFDWARFAnalyzer:
         if 'DW_AT_abstract_origin' in die.attributes:
             origin_attr = die.attributes['DW_AT_abstract_origin']
             origin_die = self.get_referenced_die(die.cu, origin_attr)
-            return self.resolve_type(origin_die, prefix, is_type, depth + 1)
+            if origin_die is not None:
+                return self.resolve_type(origin_die, prefix, is_type, depth + 1)
+            return "void"
 
         if 'DW_AT_type' in die.attributes:
             type_attr = die.attributes['DW_AT_type']
             type_die = self.get_referenced_die(die.cu, type_attr)
-            return self.resolve_type(type_die, prefix, True, depth + 1)
+            if type_die is not None:
+                return self.resolve_type(type_die, prefix, True, depth + 1)
+            return "void"
 
         if is_type and 'DW_AT_name' in die.attributes:
             return prefix + die.attributes['DW_AT_name'].value.decode('utf-8')
@@ -88,11 +95,13 @@ class ELFDWARFAnalyzer:
         if 'DW_AT_abstract_origin' in die.attributes:
             origin_attr = die.attributes['DW_AT_abstract_origin']
             origin_die = self.get_referenced_die(die.cu, origin_attr)
-            return self.retrieve_name(origin_die, depth + 1)
+            if origin_die is not None:
+                return self.retrieve_name(origin_die, depth + 1)
+            return "void"
 
         return "void"
 
-    def find_function_return_type(self, cu, func_address: int) -> Optional[str]:
+    def find_function_return_type(self, cu: CompileUnit, func_address: int) -> Optional[str]:
         """Find the return type of a function at a given address."""
         for die in cu.get_top_DIE().iter_children():
             if die.tag != 'DW_TAG_subprogram':
@@ -157,7 +166,6 @@ class ELFDWARFAnalyzer:
         return locations
 
     def get_line_program_entry(self, line_program: LineProgram, addr: int) -> Tuple[Optional[str], Optional[int], Optional[int]]:
-        state = None
         prev_state = None
 
         # Iterate over entries to process the state machine
@@ -192,7 +200,7 @@ class ELFDWARFAnalyzer:
         # If no valid entry is found
         return ('<unknown>', None, None)
     
-    def get_full_path(self, line_program: LineProgram, file_entry) -> str:
+    def get_full_path(self, line_program: LineProgram, file_entry: Any) -> str:
         dir_index = file_entry.dir_index
         if dir_index == 0:
             directory = '.'
@@ -200,13 +208,16 @@ class ELFDWARFAnalyzer:
             directory = line_program['include_directory'][dir_index].decode('utf-8')
         return os.path.join(directory, file_entry.name.decode('utf-8'))
 
-    def die_contains_address(self, die, cu:CompileUnit, addr:int) -> bool:
+    def die_contains_address(self, die: DIE, cu: CompileUnit, addr: int) -> bool:
         # Check for range list
         if self.dwarfinfo is None:
             raise DWARFError("DWARF info not loaded")
         if 'DW_AT_ranges' in die.attributes:
             ranges_offset = die.attributes['DW_AT_ranges'].value
-            ranges_list = self.dwarfinfo.range_lists().get_range_list_at_offset(ranges_offset, cu)
+            range_lists = self.dwarfinfo.range_lists()
+            if range_lists is None:
+                return False
+            ranges_list = range_lists.get_range_list_at_offset(ranges_offset, cu)
             base_address = None
             for entry in ranges_list:
                 if isinstance(entry, BaseAddressEntry):
@@ -243,7 +254,7 @@ class ELFDWARFAnalyzer:
 
         return False
 
-    def find_subprogram_die_containing_address(self, cu:CompileUnit, addr:int) -> Optional[DIE]:
+    def find_subprogram_die_containing_address(self, cu: CompileUnit, addr: int) -> Optional[DIE]:
         q = [cu.get_top_DIE()]
         while len(q) > 0:
             die = q.pop()
@@ -253,7 +264,7 @@ class ELFDWARFAnalyzer:
                 return die
         return None
 
-    def find_inlined_subroutine_dies_containing_address(self, cu:CompileUnit, subprogram:DIE, addr:int) -> List[DIE]:
+    def find_inlined_subroutine_dies_containing_address(self, cu: CompileUnit, subprogram: DIE, addr: int) -> List[DIE]:
         q = [subprogram]
         inlined_dies = []
         while len(q) > 0:
@@ -264,11 +275,12 @@ class ELFDWARFAnalyzer:
 
         return inlined_dies
 
-    def find_dies_containing_address2(self, cu, tags, addr:int):
+    def find_dies_containing_address2(self, cu: CompileUnit, tags: Any, addr: int) -> List[DIE]:
+        _ = tags  # Unused parameter
         return [die for die in cu.iter_DIEs()
                 if die.attributes and self.die_contains_address(die, cu, addr)]
 
-    def process_subprogram(self, die, locations):
+    def process_subprogram(self, die: DIE, locations: List) -> None:
         file_name = self.get_die_source_file(die)
         line = die.attributes.get('DW_AT_decl_line', None)
         column = die.attributes.get('DW_AT_decl_column', None)
@@ -298,22 +310,28 @@ class ELFDWARFAnalyzer:
         depth = self.calculate_inline_depth(die)
         return (depth, call_file, call_line_value, call_column_value, func_name)
 
-    def process_abstract_origin(self, die, locations):
+    def process_abstract_origin(self, die: DIE, locations: List) -> None:
         file_name = self.get_die_source_file(die)
         line = die.attributes.get('DW_AT_decl_line', None)
         column = die.attributes.get('DW_AT_decl_column', None)
         locations.append((file_name, line.value if line else None, column.value if column else None))
 
-    def get_die_source_file(self, die):
+    def get_die_source_file(self, die: DIE) -> Optional[str]:
         file_attr = die.attributes.get('DW_AT_decl_file')
         if file_attr is None:
             if 'DW_AT_abstract_origin' in die.attributes:
                 origin_attr = die.attributes['DW_AT_abstract_origin']
                 origin_die = self.get_referenced_die(die.cu, origin_attr)
-                return self.get_die_source_file(origin_die)
+                if origin_die is not None:
+                    return self.get_die_source_file(origin_die)
+                return None
             return None
         file_index = file_attr.value
+        if self.dwarfinfo is None:
+            return None
         line_program = self.dwarfinfo.line_program_for_CU(die.cu)
+        if line_program is None:
+            return None
         file_entries = line_program['file_entry']
         if file_index < len(file_entries):
             return self.get_full_path(line_program, file_entries[file_index])
