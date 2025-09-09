@@ -972,7 +972,7 @@ class Ftrace:
             assert(not self.removed)
             if v:
                 self.ftrace.kprobes_disabled = False
-            Event.enable.fset(self, v)  # type: ignore[attr-defined]
+            Ftrace.Event.enable.fset(self, v)  # type: ignore[attr-defined]
 
         @property
         def target_function(self) -> str:
