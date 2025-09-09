@@ -314,9 +314,7 @@ class KProbesRecorder(Recorder):
                 # Ignore interrupts, exceptions
                 prev_insn = self.angr_mgr.get_prev_insn(l['from_ip'])
                 if prev_insn is None or not arch.is_branch_insn(prev_insn):
-                    pr_msg(f'failed insn {prev_insn} to {hex(l["to_ip"])}', level="ERROR")
-                    assert(0 == 1)
-                    continue
+                    raise RuntimeError(f'Expected branch instruction but got {prev_insn} at {hex(l["from_ip"])} -> {hex(l["to_ip"])}')
 
                 if to_sym is None or (syms is not None and self.is_invalid_func_probe(to_sym)):
                     untracked = 1

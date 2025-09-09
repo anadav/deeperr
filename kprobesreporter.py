@@ -116,8 +116,7 @@ class KprobesReporter(Reporter):
             match_ip = insn and insn.address == next_ip
 
             if ty == 'func' and not match_ip:
-                assert(0 == 1)
-                continue
+                raise RuntimeError(f"Function entry trace mismatch: expected IP {hex(next_ip) if next_ip else 'None'}, but instruction is at {hex(insn.address) if insn else 'None'}")
 
             target_insn = None
             go_to_next_insn = False
@@ -134,14 +133,9 @@ class KprobesReporter(Reporter):
                 raise NotImplementedError("indirect jump")
             elif arch.is_call_insn(insn):
                 if ty != 'func':
-                    #target_insn = self.angr_mgr.get_insn(l['addr'])
-                    # We are just going to skip endbr-like probes
-                    #if arch.is_indirect_branch_target(target_insn):
-                    #    continue
-                    pass
+                    pass  # Skip non-function traces for call instructions
                 elif not match_ip or ty != 'func':
-                    # TODO: Cleaner error
-                    assert(0 == 1)
+                    raise RuntimeError(f"Call instruction trace mismatch at {hex(insn.address)}: expected function entry but got trace type '{ty}' with match_ip={match_ip}")
                 else:
                     # ty == 'func'
                     to_ip = self.angr_mgr.get_sym_addr(l['to_ip'])
