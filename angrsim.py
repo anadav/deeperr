@@ -102,31 +102,31 @@ class AngrSim:
     def active_states(self) -> List[SimState]:
         """Get the active states from the simulation manager.
         
-        Uses angr's built-in 'active' attribute which is a list of states.
+        Uses the stashes dictionary to access active states.
         """
         if self.simgr is None:
             return []
-        return self.simgr.active  # type: ignore[attr-defined,return-value]
+        return self.simgr.stashes.get('active', [])  # type: ignore[attr-defined]
     
     def remove_active_state(self, state: SimState) -> None:
         """Remove a state from the active stash."""
         if self.simgr is not None:
-            self.simgr.active.remove(state)  # type: ignore[attr-defined]
+            self.simgr.stashes['active'].remove(state)  # type: ignore[attr-defined]
     
     def extend_active_states(self, states: List[SimState]) -> None:
         """Add multiple states to the active stash."""
         if self.simgr is not None:
-            self.simgr.active.extend(states)  # type: ignore[attr-defined]
+            self.simgr.stashes['active'].extend(states)  # type: ignore[attr-defined]
     
     @property
     def deadended_states(self) -> List[SimState]:
         """Get the deadended states from the simulation manager.
         
-        Uses angr's built-in 'deadended' attribute which is a list of states.
+        Uses the stashes dictionary to access deadended states.
         """
         if self.simgr is None:
             return []
-        return self.simgr.deadended  # type: ignore[attr-defined,return-value]
+        return self.simgr.stashes.get('deadended', [])  # type: ignore[attr-defined]
     
     @property
     def one_active(self) -> Optional[SimState]:
@@ -433,7 +433,7 @@ class AngrSim:
         if not handle_timeout or step_time <= AngrSim.STEP_TIMEOUT:
             return False
 
-        next_states = [s.copy() for s in simgr.active]
+        next_states = [s.copy() for s in simgr.stashes.get('active', [])]
         reset_states = [self.copy_reset_state(s) for s in next_states]
         simgr.drop(stash = 'active')
         simgr.populate('active', reset_states)
@@ -474,7 +474,7 @@ class AngrSim:
             
         start_step_time = time.time()
 
-        for s in simgr.active:  # type: ignore[union-attr]
+        for s in simgr.stashes.get('active', []):  # type: ignore[attr-defined]
             control = self.get_control(s)
             control.update(s)
 
@@ -577,7 +577,7 @@ class AngrSim:
         new_states: List[SimState] = list()
 
         # Re-constrain the unconstrained states for indirect calls and returns
-        for state in simgr.unconstrained:
+        for state in simgr.stashes.get('unconstrained', []):
             c = self.get_control(state)
             if c.diverged:
                 continue
@@ -642,7 +642,7 @@ class AngrSim:
 
         simgr.move('unconstrained', 'active', lambda x: not self.get_control(x).diverged)
 
-        for state in simgr.active:
+        for state in simgr.stashes.get('active', []):
             self._update_control(state, new_states)
 
         simgr.populate('active', new_states)
@@ -735,7 +735,7 @@ class AngrSim:
         msg = "simulating"
         pbar = Pbar(msg, total=trace_length, unit="branch")
 
-        while len(self.simgr.deadended) == 0 and len(self.active_states) != 0:
+        while len(self.simgr.stashes.get('deadended', [])) == 0 and len(self.active_states) != 0:
             # All states should have the same instruction pointer
             pbar.update_to(self.get_control(self.active_states[0]).done_branches)
 
@@ -766,7 +766,7 @@ class AngrSim:
             self.simgr.move('active', 'deadended',
                             lambda x:len(self.get_control(x).branches) == 0 or self.is_ret_failure(x))
 
-            if len(self.simgr.deadended) == 0 and len(self.active_states) == 0:
+            if len(self.simgr.stashes.get('deadended', [])) == 0 and len(self.active_states) == 0:
                 pbar.set_description_str(f'{msg} (diverged)')
                 self.handle_divergence(res)
 
@@ -775,7 +775,7 @@ class AngrSim:
         pr_msg("checking simulation...", level='DEBUG')
 
 
-        simulation_successful = self.is_simulation_successful(self.simgr.deadended)
+        simulation_successful = self.is_simulation_successful(self.simgr.stashes.get('deadended', []))
         if (not simulation_successful or
             not 'diverged' in self.simgr.stashes or
             len(self.simgr.stashes['diverged']) == 0):
@@ -783,7 +783,7 @@ class AngrSim:
                 pr_msg("simulation successful, but no divergence found", level='DEBUG')
             raise SystemError("simulation failed")
         
-        errorcode_callstack_depth = len(self.simgr.deadended[0].callstack)
+        errorcode_callstack_depth = len(self.simgr.stashes['deadended'][0].callstack)
         res['errorcode return depth'] = errorcode_callstack_depth
 
         def filter_func(s: SimState) -> str:
@@ -838,7 +838,7 @@ class AngrSim:
                            step_func = self.backtrack_step_func,
                            until = self.backtrack_until_func)
 
-            if len(self.simgr.deadended) > 0:
+            if len(self.simgr.stashes.get('deadended', [])) > 0:
                 failure_stack = self.get_failure_stack(start_state)
                 if failure_stack is not None:
                     res['failure_stack'] = failure_stack
@@ -868,7 +868,7 @@ class AngrSim:
     def backtrack_until_func(self, simgr: SimulationManager) -> bool:
         if time.time() - self.start_backtracking_time > self.BACKTRACK_TIMEOUT:
             return True
-        return len(simgr.deadended) > 0
+        return len(simgr.stashes.get('deadended', [])) > 0
 
     def get_failure_stack(self, failing_state: Optional[SimState]) -> Optional[List[int]]:
         failure_stack: List[int] = [] 
