@@ -64,10 +64,18 @@ class Recorder:
         self.kallsyms: Optional[Kallsyms] = None
 
         if kcore is not None:
+            import time
+            pr_msg('Initializing Kallsyms...', level='DEBUG')
+            start_time = time.time()
             self.kallsyms = Kallsyms(objs = objs)
+            pr_msg(f'Kallsyms initialized in {time.time() - start_time:.2f}s', level='DEBUG')
+            
+            pr_msg('Initializing Angr manager...', level='DEBUG')
+            start_time = time.time()
             self.angr_mgr = Angr(kallsyms = self.kallsyms,
                                 kcore = kcore,
                                 saved_segs = None)
+            pr_msg(f'Angr manager initialized in {time.time() - start_time:.2f}s', level='DEBUG')
 
         # Need to massage some syscall names to match those in ftrace
         self.syscall_special_event : Dict[str, str] = {
@@ -107,11 +115,20 @@ class Recorder:
 
     def set_sysexit_filter(self, ftrace_instance: Ftrace, snapshot: bool) -> 'Ftrace.Event':
         e_class, e_subclass, filter = self.get_filter_string(exit=True)
-        syscall_event = ftrace_instance.get_event(f'{e_class}/{e_subclass}')
+        event_name = f'{e_class}/{e_subclass}'
+        pr_msg(f'Setting filter on event: {event_name}', level='DEBUG')
         if filter is not None:
+            pr_msg(f'Filter expression: {filter}', level='DEBUG')
+        syscall_event = ftrace_instance.get_event(event_name)
+        if filter is not None:
+            import time
+            start_time = time.time()
             syscall_event.filter = filter
+            pr_msg(f'Filter set in {time.time() - start_time:.2f}s', level='DEBUG')
             if snapshot:
+                start_time = time.time()
                 syscall_event.trigger = f'snapshot if {filter}'
+                pr_msg(f'Trigger set in {time.time() - start_time:.2f}s', level='DEBUG')
         return syscall_event
 
     def restart_syscall(self, process: ptrace.debugger.process.PtraceProcess, syscall: PtraceSyscall) -> None:
@@ -161,6 +178,7 @@ class Recorder:
 
 
     def init_process(self, args: List[str]) -> None:
+        pr_msg('Starting the process...', level='INFO')
         args[0] = ptrace.tools.locateProgram(args[0])
         if not os.path.isfile(args[0]):
             raise FileNotFoundError(f"Error: file {args[0]} does not exist")

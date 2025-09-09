@@ -74,23 +74,39 @@ class Angr:
         self.analyzes = defaultdict(dict)
         self.removed_unsupported_insn_syms = set()
 
-       
+        import time
+        from prmsg import pr_msg
+        
+        pr_msg('Reading ignored functions...', level='DEBUG')
+        start_time = time.time()
         self.read_ignored_funcs()
+        pr_msg(f'Read ignored functions in {time.time() - start_time:.2f}s', level='DEBUG')
 
+        pr_msg('Loading kallsyms and kcore...', level='DEBUG')
+        start_time = time.time()
         self.load(kallsyms, kcore, saved_segs)
+        pr_msg(f'Loaded in {time.time() - start_time:.2f}s', level='DEBUG')
 
         self.skipped_hooked_procedure:Set[Symbol] = set()
         self.fastpath_to_ret_hooked_procedures:Set[Symbol] = set()
         self.fastpath_to_out_hooked_procedures:Set[Symbol] = set()
 
+        pr_msg('Initializing hooks...', level='DEBUG')
+        start_time = time.time()
         self.init_general_hooks()
         self.init_retpoline()
         self.init_untrain_ret()
         self.init_copy_hooks()
+        pr_msg(f'Hooks initialized in {time.time() - start_time:.2f}s', level='DEBUG')
 
         self.hooked_rep_string_addr:Set[int] = set()
         self.md.detail = True
+        
+        pr_msg('Parsing interrupt table...', level='DEBUG')
+        start_time = time.time()
         self.parse_interrupt_table()
+        pr_msg(f'Parsed interrupt table in {time.time() - start_time:.2f}s', level='DEBUG')
+        
         arch.init_symbols(self.proj)
 
         self.no_probe_sym_names = (ignore_funcs_pure|ignore_funcs_nopure|

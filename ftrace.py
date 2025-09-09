@@ -364,7 +364,18 @@ class Ftrace:
     
     @buffer_size_kb.setter
     def buffer_size_kb(self, size: int) -> None:
-        self.write_cached("buffer_size_kb", str(size))
+        # Only write if size actually changes to avoid expensive buffer reallocation
+        current_size = self.buffer_size_kb
+        if current_size != size:
+            from prmsg import pr_msg
+            pr_msg(f'Resizing ftrace buffer from {current_size}KB to {size}KB...', level='DEBUG')
+            import time
+            start_time = time.time()
+            self.write_cached("buffer_size_kb", str(size))
+            pr_msg(f'Buffer resized in {time.time() - start_time:.2f}s', level='DEBUG')
+        else:
+            from prmsg import pr_msg
+            pr_msg(f'Buffer already at {size}KB, skipping resize', level='DEBUG')
 
     @property
     def func_filter(self) -> List[str]:
@@ -611,9 +622,40 @@ class Ftrace:
     def disable_snapshot(self) -> None:
         self.snapshot_file.write_text('0')
 
-    def clear_snapshot(self) -> None:
-        self.snapshot_file.write_text('1')
+    def clear_snapshot(self, skip_alloc_check: bool = False) -> None:
+        import time
+        from prmsg import pr_msg
+        # According to ftrace documentation:
+        # - echo 0 > snapshot : Clear snapshot buffer and free memory
+        # - echo 1 > snapshot : Allocate snapshot buffer (does nothing if already allocated) 
+        # - echo 2 > snapshot : Clear snapshot buffer but keep allocated
+        #
+        # The original code did '1' then '2'. The '1' might cause reallocation
+        # which could be slow with large buffers due to RCU synchronization.
+        # Let's try just using '2' to clear without reallocating.
+        
+        # If skip_alloc_check is True, assume buffer is allocated and just clear
+        if skip_alloc_check:
+            pr_msg('Clearing snapshot buffer (fast path, write 2 only)...', level='DEBUG')
+            start_time = time.time()
+            self.snapshot_file.write_text('2')
+            pr_msg(f'Buffer cleared in {time.time() - start_time:.2f}s', level='DEBUG')
+            return
+            
+        pr_msg('Clearing snapshot buffer content (write 2)...', level='DEBUG')
+        start_time = time.time()
         self.snapshot_file.write_text('2')
+        elapsed = time.time() - start_time
+        pr_msg(f'Buffer cleared in {elapsed:.2f}s', level='DEBUG')
+        
+        # If clearing was instant, buffer might not be allocated, so allocate it
+        if elapsed < 0.01:
+            pr_msg('Buffer may not be allocated, allocating (write 1)...', level='DEBUG')
+            start_time = time.time()
+            self.snapshot_file.write_text('1')
+            pr_msg(f'Buffer allocated in {time.time() - start_time:.2f}s', level='DEBUG')
+            # Clear again after allocation
+            self.snapshot_file.write_text('2')
 
     def get_bool(self, path: str) -> bool:
         if self.trace_path is None:
@@ -658,13 +700,18 @@ class Ftrace:
 
     def get_snapshot(self, skip_trace_events: List[str], resume_trace_events: List[str]) -> List[Dict[str, Any]]:
         """Get a snapshot of the current trace buffer."""
+        import time
+        from prmsg import pr_msg
+        start_time = time.time()
         entries = list()
         # For the callstack we need the last "func" entry. We cannot rely on it
         # being the last one, since kprobes can somehow get interleaved entries.
         last_func_entry = None
 
         # Find the symbols to track
+        pr_msg(f'Reading ftrace snapshot file...', level='DEBUG')
         lines = self.snapshot_file.read_text().splitlines()
+        pr_msg(f'Read {len(lines)} lines from snapshot in {time.time() - start_time:.2f}s', level='DEBUG')
         skip_trace_strs = [s.split('/')[-1] for s in skip_trace_events]
         resume_trace_strs = [s.split('/')[-1] for s in resume_trace_events]
 

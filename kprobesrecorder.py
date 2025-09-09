@@ -1,6 +1,9 @@
 # Copyright 2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
 import logging
+import signal
+import sys
+import time
 from typing import Optional, Set, List, Dict, Tuple, Iterable, Any, Union
 from collections import deque, defaultdict
 
@@ -120,6 +123,16 @@ class KProbesRecorder(Recorder):
         return events
 
     def record(self, args: List[str]) -> int:
+        # Setup signal handler for easier interruption
+        def signal_handler(sig, frame):
+            pr_msg('\nReceived interrupt signal, cleaning up...', level='WARN')
+            ftrace = Ftrace.main_instance()
+            ftrace.remove_all_probes()
+            ftrace.current_tracer = 'nop'
+            ftrace.tracing_on = False
+            sys.exit(1)
+        
+        signal.signal(signal.SIGINT, signal_handler)
         """
         Record function to trace kernel failures using kprobes
 
@@ -143,27 +156,49 @@ class KProbesRecorder(Recorder):
             pr_msg(f"error starting process: {e}", level="FATAL")
             return 0
 
+        pr_msg('Setting ftrace buffer size...', level='DEBUG')
+        start_time = time.time()
         ftrace.buffer_size_kb = self.snapshot_size
+        pr_msg(f'Buffer size set in {time.time() - start_time:.2f}s', level='DEBUG')
+        
+        pr_msg('Configuring ftrace options...', level='DEBUG')
+        start_time = time.time()
         ftrace.irq_info = False
         ftrace.event_fork = False
         ftrace.function_fork = False
+        pr_msg(f'Options configured in {time.time() - start_time:.2f}s', level='DEBUG')
+        
+        pr_msg('Setting syscall exit filter...', level='DEBUG')
+        if self.syscall_filter is None:
+            pr_msg('WARNING: No specific syscall specified (--syscall)', level='WARN')
+            pr_msg('Filtering ALL syscalls is VERY SLOW with kprobes!', level='WARN')
+            pr_msg('Consider using --syscall to specify which syscall to monitor', level='WARN')
+        start_time = time.time()
         sys_exit_event = self.set_sysexit_filter(ftrace, True)
+        pr_msg(f'Exit filter set in {time.time() - start_time:.2f}s', level='DEBUG')
+        
         ftrace.stacktrace = False
         ftrace.func_stack_trace = True
 
+        pr_msg('Getting trace events...', level='DEBUG')
+        start_time = time.time()
         trace_events = [
             ftrace.get_event(ev)
             for ev in ['raw_syscalls/sys_enter'] + self.SKIP_TRACE_EVENTS + self.RESUME_TRACE_EVENTS
-        ] + [sys_exit_event] 
+        ] + [sys_exit_event]
+        pr_msg(f'Got {len(trace_events)} trace events in {time.time() - start_time:.2f}s', level='DEBUG')
        
         while True:
             # Cleanup if we did not finish nicely the last error
+            pr_msg('Cleaning up ftrace state...', level='DEBUG')
+            start_time = time.time()
             ftrace.remove_all_probes()
             ftrace.current_tracer = 'nop'
             ftrace.func_filter = []
             ftrace.sym_addr = True           
             for ev in trace_events:
                 ev.enable = False
+            pr_msg(f'Cleanup done in {time.time() - start_time:.2f}s', level='DEBUG')
 
             pr_msg("waiting for failure...", level='TITLE', new_line_before=True)
             syscall = self.wait_for_syscall(None)
@@ -178,20 +213,34 @@ class KProbesRecorder(Recorder):
             self.print_syscall_info(syscall)
 
             pr_msg('stage 1: producing call graph', level='TITLE', new_line_before=True)
+            pr_msg('Setting ftrace tracer to function...', level='DEBUG')
+            start_time = time.time()
             ftrace.current_tracer = 'function'
+            pr_msg(f'Set tracer in {time.time() - start_time:.2f}s', level='DEBUG')
 
+            pr_msg('Enabling trace events...', level='DEBUG')
+            start_time = time.time()
             for ev in trace_events:
                 ev.enable = True
+            pr_msg(f'Enabled events in {time.time() - start_time:.2f}s', level='DEBUG')
 
             try:
+                pr_msg('Getting snapshot by rerunning syscall...', level='DEBUG')
                 snapshot = self.rerun_get_snapshot(process, syscall)
+                pr_msg(f'Got snapshot with {len(snapshot)} entries', level='DEBUG')
             except Exception as e:
                 pr_msg(f'error: {e}', level="ERROR")
                 continue
 
+            pr_msg('Cleaning up callstack...', level='DEBUG')
             snapshot = self.cleanup_callstack(snapshot)
+            pr_msg(f'After cleanup: {len(snapshot)} entries', level='DEBUG')
+            pr_msg('Removing IRQ entries...', level='DEBUG')
             snapshot = self.remove_snapshot_irqs(snapshot)
+            pr_msg(f'After IRQ removal: {len(snapshot)} entries', level='DEBUG')
+            pr_msg('Getting symbols from snapshot...', level='DEBUG')
             trace_syms = self.get_ftrace_snapshot_syms(snapshot)
+            pr_msg(f'Found {len(trace_syms)} unique symbols', level='DEBUG')
 
             ftrace.tracing_on = False
 
@@ -353,10 +402,20 @@ class KProbesRecorder(Recorder):
 
     def rerun_get_snapshot(self, process: PtraceProcess, failing_syscall: PtraceSyscall) -> List[Dict[str, Any]]:
         ftrace = Ftrace.main_instance()
-        ftrace.clear_snapshot()
+        pr_msg('Clearing ftrace snapshot...', level='DEBUG')
+        # After first allocation, we can use fast path (just clear, don't reallocate)
+        # Use hasattr to check if this is not the first run
+        skip_alloc = hasattr(self, '_snapshot_allocated') and self._snapshot_allocated
+        ftrace.clear_snapshot(skip_alloc_check=skip_alloc)
+        if not skip_alloc:
+            self._snapshot_allocated = True
+        pr_msg('Enabling tracing...', level='DEBUG')
         ftrace.tracing_on = True
+        pr_msg('Restarting syscall...', level='DEBUG')
         self.restart_syscall(process, failing_syscall)
+        pr_msg('Waiting for syscall to complete...', level='DEBUG')
         syscall = self.wait_for_syscall(process)
+        pr_msg('Disabling tracing...', level='DEBUG')
         ftrace.tracing_on = False
 
         if syscall is None or syscall.result != failing_syscall.result:
@@ -365,7 +424,9 @@ class KProbesRecorder(Recorder):
         assert syscall.process == process
         assert syscall.instr_pointer == failing_syscall.instr_pointer
 
+        pr_msg('Reading ftrace snapshot...', level='DEBUG')
         s = ftrace.get_snapshot(self.SKIP_TRACE_EVENTS, self.RESUME_TRACE_EVENTS)
+        pr_msg(f'Got {len(s)} trace entries from snapshot', level='DEBUG')
         return s
     
     def cleanup_callstack(self, trace: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -453,7 +514,9 @@ class KProbesRecorder(Recorder):
             trapped_process: PtraceProcess
 
             try:
+                pr_msg('Waiting for syscall event...', level='DEBUG')
                 e = self.dbg.waitSyscall()
+                pr_msg('Got syscall event', level='DEBUG')
                 is_syscall = True
                 trapped_process = e.process if e is not None else process_filter[0]
             except ProcessExit as e:
