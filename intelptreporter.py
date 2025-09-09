@@ -311,11 +311,6 @@ class IntelPTReporter(Reporter):
                     found = min(mid, found or mid)
                 e = mid
 
-#        assert found is not None
-#        for i in range(found, 0, -1):
-#            if Ftrace.err_exit_regex.match(trace[i]) is not None:
-#                return i
-        
         return found
 
     @staticmethod
