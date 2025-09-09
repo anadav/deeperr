@@ -16,6 +16,8 @@ from typing import BinaryIO
 from elftools.elf.elffile import ELFFile
 
 import cle.backends
+from cle.backends.symbol import Symbol, SymbolType
+from cle import Backend
 import angr
 from arch import arch
 
@@ -56,21 +58,21 @@ def find_module_dbg(module_name:str):
     for path in pathes:
         if not os.path.exists(path) or not os.path.isdir(path):
             continue
-        for root, dirs, files in os.walk(path):
+        for root, _, files in os.walk(path):
             for file in files:
                 if file == f'{module_name}.ko' or file == f'{module_name}.ko.debug':
                     return os.path.join(root, file)
     return None
 
-lief_to_angr_type_map:Dict[Any, angr.cle.backends.SymbolType] = {
-    lief.ELF.Symbol.TYPE.OBJECT: angr.cle.backends.SymbolType.TYPE_OBJECT,
-    lief.ELF.Symbol.TYPE.FUNC: angr.cle.backends.SymbolType.TYPE_FUNCTION,
-    lief.ELF.Symbol.TYPE.FILE: angr.cle.backends.SymbolType.TYPE_OTHER,
-    lief.ELF.Symbol.TYPE.SECTION: angr.cle.backends.SymbolType.TYPE_SECTION,
-    lief.ELF.Symbol.TYPE.COMMON: angr.cle.backends.SymbolType.TYPE_OTHER,
-    lief.ELF.Symbol.TYPE.TLS: angr.cle.backends.SymbolType.TYPE_TLS_OBJECT,
-    lief.ELF.Symbol.TYPE.GNU_IFUNC: angr.cle.backends.SymbolType.TYPE_OTHER,
-    lief.ELF.Symbol.TYPE.NOTYPE: angr.cle.backends.SymbolType.TYPE_NONE,
+lief_to_angr_type_map:Dict[Any, SymbolType] = {
+    lief.ELF.Symbol.TYPE.OBJECT: SymbolType.TYPE_OBJECT,
+    lief.ELF.Symbol.TYPE.FUNC: SymbolType.TYPE_FUNCTION,
+    lief.ELF.Symbol.TYPE.FILE: SymbolType.TYPE_OTHER,
+    lief.ELF.Symbol.TYPE.SECTION: SymbolType.TYPE_SECTION,
+    lief.ELF.Symbol.TYPE.COMMON: SymbolType.TYPE_OTHER,
+    lief.ELF.Symbol.TYPE.TLS: SymbolType.TYPE_TLS_OBJECT,
+    lief.ELF.Symbol.TYPE.GNU_IFUNC: SymbolType.TYPE_OTHER,
+    lief.ELF.Symbol.TYPE.NOTYPE: SymbolType.TYPE_NONE,
 }
 
 class Kallsyms:
@@ -79,21 +81,21 @@ class Kallsyms:
         self.__find_modules()
 
         self.keep_sym_types: Set[str] = {'t', 'T', 'w', 'W', 'r', 'R'}
-        self.type_map:Dict[str, angr.cle.backends.SymbolType] = {
-                    'a':angr.cle.backends.SymbolType.TYPE_OTHER,
-                    'A':angr.cle.backends.SymbolType.TYPE_OTHER,
-                    'd':angr.cle.backends.SymbolType.TYPE_OBJECT,
-                    'D':angr.cle.backends.SymbolType.TYPE_OBJECT,
-                    'b':angr.cle.backends.SymbolType.TYPE_OBJECT,
-                    'B':angr.cle.backends.SymbolType.TYPE_OBJECT,
-                    'r':angr.cle.backends.SymbolType.TYPE_OBJECT,
-                    'R':angr.cle.backends.SymbolType.TYPE_OBJECT,
-                    'v':angr.cle.backends.SymbolType.TYPE_OTHER,
-                    'V':angr.cle.backends.SymbolType.TYPE_OTHER,
-                    't':angr.cle.backends.SymbolType.TYPE_FUNCTION,
-                    'T':angr.cle.backends.SymbolType.TYPE_FUNCTION,
-                    'w':angr.cle.backends.SymbolType.TYPE_OTHER,
-                    'W':angr.cle.backends.SymbolType.TYPE_OTHER,
+        self.type_map:Dict[str, SymbolType] = {
+                    'a':SymbolType.TYPE_OTHER,
+                    'A':SymbolType.TYPE_OTHER,
+                    'd':SymbolType.TYPE_OBJECT,
+                    'D':SymbolType.TYPE_OBJECT,
+                    'b':SymbolType.TYPE_OBJECT,
+                    'B':SymbolType.TYPE_OBJECT,
+                    'r':SymbolType.TYPE_OBJECT,
+                    'R':SymbolType.TYPE_OBJECT,
+                    'v':SymbolType.TYPE_OTHER,
+                    'V':SymbolType.TYPE_OTHER,
+                    't':SymbolType.TYPE_FUNCTION,
+                    'T':SymbolType.TYPE_FUNCTION,
+                    'w':SymbolType.TYPE_OTHER,
+                    'W':SymbolType.TYPE_OTHER,
         }
 
         #self.remapped_module_sections = self.read_module_sections()
@@ -312,13 +314,13 @@ class Kallsyms:
         sections = {section.name:section for section in binary.sections}
         sections_to_alloc = [section for section in binary.sections
                                if section.has(lief.ELF.Section.FLAGS.ALLOC)
-                               and 'percpu' not in section.name
-                               and '.note' not in section.name]
+                               and 'percpu' not in str(section.name)
+                               and '.note' not in str(section.name)]
 
         # We do not want writable sections, but some of them still have the write flag
         sections_to_load = [section.name for section in sections_to_alloc
                             if not section.has(lief.ELF.Section.FLAGS.WRITE) or
-                                'rodata' in section.name]
+                                'rodata' in str(section.name)]
         section_names_to_alloc = {section.name for section in sections_to_alloc}
 
         base_addr = min([section.virtual_address for section in sections_to_alloc])
@@ -347,7 +349,8 @@ class Kallsyms:
             'segments': segments_to_load,
         }
 
-    def decompress_file(input_file, output_file):
+    @staticmethod
+    def decompress_file(input_file: str, output_file: str) -> None:
         dctx = zstd.ZstdDecompressor()
         with open(input_file, 'rb') as ifh, open(output_file, 'wb') as ofh:
             dctx.copy_stream(ifh, ofh)
@@ -362,7 +365,7 @@ class Kallsyms:
             if not os.path.exists(path) or not os.path.isdir(path):
                 continue
 
-            for root, dirs, files in os.walk(path):
+            for root, _, files in os.walk(path):
                 for file in files:
                     zst = file.endswith('.ko.zst')
                     if not file.endswith('.ko.debug') and not file.endswith('.ko') and not zst:
@@ -530,17 +533,17 @@ class Kallsyms:
 
         return modules
 
-    def get_symbols(self, backend:cle.Backend, name:str) -> List[cle.Symbol]:
+    def get_symbols(self, backend:Backend, name:str) -> List[Symbol]:
         syms = self.exes[name]['symbols']
         assert isinstance(syms, list)
 
         if name.startswith('__builtin') or name.startswith('bpf:'):
-            syms = [cle.Symbol(owner = backend, name = s[0],
+            syms = [Symbol(owner = backend, name = s[0],
                     relative_addr = s[1],
                     sym_type = self.type_map[s[2]],
                     size = s[3]) for s in syms]
         else:
-            syms = [cle.Symbol(owner = backend, name = s[0],
+            syms = [Symbol(owner = backend, name = s[0],
                     relative_addr = s[1],
                     sym_type = s[2],
                     size = s[3]) for s in syms]
