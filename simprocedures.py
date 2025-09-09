@@ -75,17 +75,18 @@ class CopyProcedure(SimProcedure):
         copied = self.state.solver.BVS('copied', 64)
         self.state.add_constraints(copied >= 0)  # type: ignore[operator]
 
-        if False and 'unconstrained' in str(limit):
-            old_limit = limit
-            limit = self.state.solver.BVS('limit', arch.address_width)
-            self.state.add_constraints(old_limit == limit)
+        # Dead code - False condition
+        # if False and 'unconstrained' in str(limit):
+        #     old_limit = limit
+        #     limit = self.state.solver.BVS('limit', arch.address_width)
+        #     self.state.add_constraints(old_limit == limit)
 
         self.state.add_constraints(limit <= self.state.libc.max_memcpy_size)  # type: ignore[attr-defined]
         #self.state.add_constraints(copied <= self.state.libc.max_memcpy_size)
         self.state.add_constraints(copied <= limit)
 
         if not self.state.solver.is_true(copied == 0):
-            src_mem = self.state.memory.load(src_addr, copied, endness='Iend_LE')
+            src_mem = self.state.memory.load(src_addr, copied)  # type: ignore[arg-type]
             self.state.memory.store(dst_addr, src_mem, size=copied, endness='Iend_LE')
 
         return self.ret(limit - copied)
@@ -127,7 +128,7 @@ class ProcedureWrapper(SimProcedure):
         # Collect arguments from the state registers according to the calling convention
         track_to_ret(self)
 
-        cc = self.state.project.factory.cc()
+        cc = self.state.project.factory.cc()  # type: ignore[attr-defined]
         args = cc.ARG_REGS
 
         # Fetch arguments from the registers
