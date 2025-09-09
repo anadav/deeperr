@@ -5,7 +5,7 @@ import logging
 import tqdm
 import colors
 from time import time
-from typing import Any, Dict, Tuple, List, Optional, Set, Iterable, TextIO, Sized, Iterable, Union
+from typing import Any, Dict, Tuple, List, Optional, Set, Iterable, TextIO, Sized, Union
 
 level_to_logging = {
     #           logging-level,  color,      flush log,  stderr,
@@ -24,14 +24,14 @@ startup_time = time()
 def uptime() -> float:
     return time() - startup_time
 
-output_file:TextIO = sys.stdout
-quiet:bool = False
-debug:bool = False
+output_file: TextIO = sys.stdout
+quiet: bool = False
+debug: bool = False
 
 def is_terminal_output() -> bool:
     return output_file in {sys.stdout, sys.stderr}
 
-def change_output(f_name:str):
+def change_output(f_name: str) -> None:
     global output_file
 
     try:
@@ -39,15 +39,15 @@ def change_output(f_name:str):
     except Exception as exc:
         raise ValueError(f'error opening output file {f_name}: {str(exc)}')
 
-def set_debug(d:bool):
+def set_debug(d: bool) -> None:
     global debug
     debug = d
 
-def set_quiet(q:bool):
+def set_quiet(q: bool) -> None:
     global quiet
     quiet = q
 
-def pr_msg(msg: str, level:str='INFO', new_line_before:bool=False, new_line_after:bool=False):
+def pr_msg(msg: str, level: str = 'INFO', new_line_before: bool = False, new_line_after: bool = False) -> None:
     global output_file
 
     l = level_to_logging[level]
@@ -76,9 +76,9 @@ def pr_msg(msg: str, level:str='INFO', new_line_before:bool=False, new_line_afte
 class Pbar(tqdm.tqdm):
     in_pbar = 0
 
-    def __init__(self, message:str, items:Optional[Union[Sized, Iterable]]=None, 
-                total:Optional[int]=None, unit:str='it', ignore_zero:bool=True,
-                disable:bool=False):
+    def __init__(self, message: str, items: Optional[Union[Sized, Iterable]] = None, 
+                total: Optional[int] = None, unit: str = 'it', ignore_zero: bool = True,
+                disable: bool = False) -> None:
         assert total is not None or isinstance(items, Sized)
 
         if total is None and isinstance(items, Sized):
@@ -96,33 +96,34 @@ class Pbar(tqdm.tqdm):
             Pbar.in_pbar += 1
         self.pbar_disabled = disable
 
-    def update_to(self, n:int):
+    def update_to(self, n: int) -> None:
         super().update(n - self.n)
 
-    def __disable(self):
+    def __disable(self) -> None:
         if not self.pbar_disabled:
             Pbar.in_pbar -= 1
         self.pbar_disabled = True
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.__disable()
-        self.update(self.total - self.n)
+        if self.total is not None:
+            self.update(self.total - self.n)
         super().__del__()
     
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         self.__disable()
-        if exc_type == None:
+        if exc_type is None and self.total is not None:
             self.update_to(self.total)
         super().__exit__(exc_type, exc_value, traceback)
 
-    def close(self):
+    def close(self) -> None:
         self.__disable()
         super().close()
 
-warned_once:Set[str] = set()
+warned_once: Set[str] = set()
 
-def warn_once(msg: str):
-    if msg not in warned_once:
+def warn_once(msg: str) -> None:
+    if msg in warned_once:
         return
     logging.warning(msg)
     warned_once.add(msg)
