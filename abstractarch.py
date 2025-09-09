@@ -97,6 +97,18 @@ class Arch(ABC):
     @abstractmethod
     def syscall_entry_points(self) -> Set[str]:
         pass
+    
+    @abstractmethod
+    def is_syscall_entry_sym(self, sym_name: Optional[str]) -> bool:
+        """Check if a symbol name indicates a syscall entry point.
+        
+        Args:
+            sym_name: The symbol name to check (can be None)
+            
+        Returns:
+            True if this is a syscall entry point symbol
+        """
+        pass
 
     @abstractmethod
     def get_direct_branch_target(self, insn:capstone.CsInsn) -> int:

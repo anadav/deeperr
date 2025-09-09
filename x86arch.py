@@ -199,6 +199,13 @@ class ArchX86(Arch):
     def syscall_entry_points(self) -> Set[str]:
         return {'do_syscall_64'}
     
+    def is_syscall_entry_sym(self, sym_name: Optional[str]) -> bool:
+        """Check if a symbol name indicates a syscall entry point."""
+        if sym_name is None:
+            return False
+        # These are x86-64 specific syscall entry symbols
+        return sym_name in {'__entry_text_start', 'entry_SYSCALL_64', 'syscall_enter_from_user_mode'}
+    
     def controlStatePluginArch(self) -> ControlStatePluginX86:
         return ControlStatePluginX86()
 

@@ -193,8 +193,7 @@ class IntelPTReporter(Reporter):
         return bool(insn and arch.is_iret_insn(insn))
 
     def is_syscall_entry(self, entry:Dict[str, Any]) -> bool:
-        # TODO: move to arch-specific code
-        return entry.get('to_sym') in {'__entry_text_start', 'entry_SYSCALL_64', 'syscall_enter_from_user_mode'}
+        return arch.is_syscall_entry_sym(entry.get('to_sym'))
 
     def is_syscall_exit(self, entry:Dict[str, Any]) -> bool:
         return (entry.get('to_sym') == 'syscall_exit_to_user_mode' and
@@ -243,7 +242,6 @@ class IntelPTReporter(Reporter):
             pr_msg(f"Processing trace_failure: {trace_failure}", level='DEBUG')
             failure_entries = parsed[:trace_failure['index']]
             failure_errcode = trace_failure.get('errcode')
-            failure_syscall = trace_failure.get('syscall', 0)
             
             # Skip if we don't have an error code
             if failure_errcode is None:
