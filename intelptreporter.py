@@ -201,78 +201,80 @@ class IntelPTReporter(Reporter):
                 entry['to_off'] == 0)
 
     def report(self) -> None:
-        n_reported = 0
-        n_traces = len(self.traces)
-        n_failures = len(self.failures)
+        # Intel PT only supports a single failure per recording
+        if len(self.failures) == 0:
+            pr_msg('No failures recorded', level='INFO')
+            return
+        
+        if len(self.failures) > 1:
+            pr_msg(f'Warning: Intel PT only supports single failure, but found {len(self.failures)} failures. Using first one.', level='WARNING')
+        
+        failure = self.failures[0]
+        pr_msg(f"Processing failure from recording: {failure}", level='DEBUG')
+        
+        # Intel PT should have a single trace
+        if len(self.traces) == 0:
+            pr_msg('No trace available', level='ERROR')
+            return
+        
+        if len(self.traces) > 1:
+            pr_msg(f'Warning: Expected single trace for Intel PT, but found {len(self.traces)}. Using first one.', level='WARNING')
+        
+        trace = self.traces[0]
+        
+        if not isinstance(trace, str):
+            raise SystemError('Intel-PT trace is not a string')
 
-        # TODO: coorelate the trace with the failure
-        for failure in self.failures:
-            pr_msg(f"Processing failure from recording: {failure}", level='DEBUG')
-            for i_trace, trace in enumerate(self.traces):
-                # Although we have a timestamp on the failure that we collected using eBPF,
-                # it is using a different time source than perf, so we have no reasonable way
-                # to correlate the two. Instead, we just look for the error code in the trace
-                # and then look for the syscall entry/exit points around it.
-                pr_msg(f"processing trace {i_trace+1}/{n_traces}", level='INFO')
-                
-                if not isinstance(trace, str):
-                    raise SystemError('Intel-PT trace is not a string')
+        pr_msg("Processing Intel PT trace", level='INFO')
+        trace_entries = trace.splitlines()
 
-                trace_entries = trace.splitlines()
+        # Pass the failure's error code to parse_trace
+        failure_errcode = failure.get('err', failure.get('errcode'))
+        parsed, trace_failures = self.parse_trace(trace_entries, errcode=failure_errcode)
+        
+        pr_msg(f'parse_trace returned {len(trace_failures)} failures', level='DEBUG')
 
-                # Pass the failure's error code to parse_trace
-                failure_errcode = failure.get('err', failure.get('errcode'))
-                parsed, trace_failures = self.parse_trace(trace_entries, errcode=failure_errcode)
+        if len(trace_failures) == 0:
+            pr_msg('Found no failures in trace', level='INFO')
+            return
 
-                #failures = self.get_errors(trace_entries)
-                
-                pr_msg(f'parse_trace returned {len(trace_failures)} failures', level='DEBUG')
+        # Process the first trace failure (should typically be just one for Intel PT)
+        for trace_failure in trace_failures:
+            pr_msg(f"Processing trace_failure: {trace_failure}", level='DEBUG')
+            failure_entries = parsed[:trace_failure['index']]
+            failure_errcode = trace_failure.get('errcode')
+            failure_syscall = trace_failure.get('syscall', 0)
+            
+            # Skip if we don't have an error code
+            if failure_errcode is None:
+                pr_msg(f'Skipping failure without error code: {trace_failure}', level='INFO')
+                continue
 
-                if len(trace_failures) == 0:
-                    pr_msg('found no failures in trace', level='INFO')
-                    continue
+            failure_entries = [e for e in failure_entries if e is not None and e['pid'] == trace_failure['pid']]
 
-                for trace_failure in trace_failures:
-                    pr_msg(f"Processing trace_failure: {trace_failure}", level='DEBUG')
-                    failure_entries = parsed[:trace_failure['index']]
-                    failure_errcode = trace_failure.get('errcode')
-                    failure_syscall = trace_failure.get('syscall', 0)
-                    
-                    # Skip if we don't have an error code
-                    if failure_errcode is None:
-                        pr_msg(f'Skipping failure without error code: {trace_failure}', level='INFO')
-                        continue
+            # Remove any entries in which the from_sym or to_sym is None
+            failure_entries = [e for e in failure_entries
+                            if e.get('from_sym', '') is not None and e.get('to_sym', '') is not None]
+            
+            # No need for filtering - Intel PT handles only a single specific failure
 
-                    failure_entries = [e for e in failure_entries if e is not None and e['pid'] == trace_failure['pid']]
+            branches = self.skip_intr_entries(failure_entries)
 
-                    # Remove any entries in which the from_sym or to_sym is None
-                    failure_entries = [e for e in failure_entries
-                                    if e.get('from_sym', '') is not None and e.get('to_sym', '') is not None]
+            # TODO: extract all syscalls, not just the last one
+            extracted = self.extract_last_syscall(branches)
+            if extracted is None:
+                continue
 
-                    # TODO: Fix the filters based on the failure entries
-                    if ((self.syscall_filter and self.syscall_filter != failure_syscall) or
-                        (self.errcode_filter and self.errcode_filter != failure_errcode)):
-                        continue
+            branches = extracted
+            branches = self.skip_fentry_entries(branches)
 
-                    branches = self.skip_intr_entries(failure_entries)
-
-                    # TODO: extract all syscalls, not just the last one
-                    extracted = self.extract_last_syscall(branches)
-                    if extracted is None:
-                        continue
-
-                    branches = extracted
-                    branches = self.skip_fentry_entries(branches)
-
-                    super().report_one(
-                        branches = branches,
-                        errcode = -failure_errcode,
-                        simulate_all = True
-                    )
-                    n_reported += 1
-
-                    if n_reported == n_failures:
-                        return
+            super().report_one(
+                branches = branches,
+                errcode = -failure_errcode,
+                simulate_all = True
+            )
+            # For Intel PT, we only process one failure
+            return
 
         return
 
