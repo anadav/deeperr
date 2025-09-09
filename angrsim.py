@@ -217,9 +217,8 @@ class AngrSim:
         if sym.name == '__x86_indirect_thunk_array':
             return False
 
-        # XXX: hack
-#        if sym.name in {'_copy_to_user'}:
-#            return False
+        # _copy_to_user is now properly handled via CopyProcedure hook in angrmgr.py
+        # (see userspace_copy_funcs and init_direct_sym_libc_hooks)
 
         if self.angr_mgr.is_skipped_sym(s):
             return True
