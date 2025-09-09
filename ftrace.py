@@ -946,7 +946,7 @@ class Ftrace:
 
         def __repr__(self) -> str:
             module_name = self.module_name if self.module_name != '' else 'kernel'
-            target_function = self.target_function if isinstance(self.target_function, str) else self.target_function.name
+            target_function = self.__target_function if isinstance(self.__target_function, str) else self.__target_function.name
 
             return (f'''KprobeEvent("{self.probe_type}:
                         {self.event_type}:
