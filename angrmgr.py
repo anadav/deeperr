@@ -9,7 +9,7 @@ import io
 
 import angr
 from angr.sim_state import SimState
-from angr.sim_procedures import SimProcedure
+from angr.sim_procedure import SimProcedure
 import capstone
 from cle.backends.symbol import Symbol
 from arch import arch
@@ -53,8 +53,8 @@ class DisassemblyError(Exception):
         self.msg = msg
 
 class Angr:
-    type_map: Dict[str, angr.cle.backends.SymbolType] = dict()
-    step_func_proc_trace = angr.SIM_PROCEDURES['stubs']['ReturnUnconstrained']()
+    type_map: Dict[str, Any] = dict()
+    step_func_proc_trace = angr.SIM_PROCEDURES['stubs']['ReturnUnconstrained']()  # type: ignore[attr-defined]
 
     def __init__(self,
                  kallsyms: 'Kallsyms',
@@ -76,9 +76,9 @@ class Angr:
         self.sym_hint: Optional[Symbol] = None
         self.code_hooks_done : Set[Symbol] = set()
 
-        Angr.type_map = {x: angr.cle.backends.SymbolType.TYPE_OTHER
+        Angr.type_map = {x: 'TYPE_OTHER'  # type: ignore[misc]
                     for x in ['a', 'A', 'd', 'D', 'b', 'B', 'r', 'R', 'v', 'V']}
-        Angr.type_map.update({x: angr.cle.backends.SymbolType.TYPE_FUNCTION
+        Angr.type_map.update({x: 'TYPE_FUNCTION'  # type: ignore[misc]
                     for x in ['t', 'T', 'w', 'W']})
 
         self.analyzes = defaultdict(dict)
@@ -317,12 +317,13 @@ class Angr:
                     if tgt_sym and sym != tgt_sym:
                         br_tgts.add(tgt_sym)
 
-        if 'branch targets' not in self.analyzes[sym]:
-            br_tgts = set()
+        sym_key = str(sym.name) if sym else 'unknown'
+        if 'branch targets' not in self.analyzes[sym_key]:
+            br_tgts: Set[Symbol] = set()
             self.for_each_insn_in_sym(sym, collect, br_tgts=br_tgts)
-            self.analyzes[sym]['branch targets'] = br_tgts
+            self.analyzes[sym_key]['branch targets'] = br_tgts
 
-        return self.analyzes[sym]['branch targets']
+        return self.analyzes[sym_key]['branch targets']
 
     # Returns ([probe insns], [reachable symbols], [complete])
     def process_reachable_syms(self, syms: Iterable[Symbol]) -> Set[Symbol]:
@@ -387,7 +388,7 @@ class Angr:
                     limits = [(None, None), (None, None), (0, 4096)]
 
                 self.hook_sym(s,
-                              ProcedureWrapper(angr.SIM_PROCEDURES['libc'][f], limits),
+                              ProcedureWrapper(angr.SIM_PROCEDURES['libc'][f], limits),  # type: ignore[attr-defined, arg-type]
                               skip_to_ret=True)
             except (ValueError, KeyError) as e:
                 pass
@@ -401,7 +402,7 @@ class Angr:
                 continue
 
     def init_retpoline(self) -> None:
-        for reg in arch.retpoline_thunk_regs:
+        for reg in arch.retpoline_thunk_regs:  # type: ignore[attr-defined]
             try:
                 self.hook_sym('__x86_indirect_thunk_'+reg,
                               proc = RetpolineProcedure(reg),
@@ -420,7 +421,7 @@ class Angr:
 
     def after_last_branch_addr(self, s: SimState) -> int:
         js = s.history.jump_source
-        insns = s.history.parent.state.block().disassembly.insns
+        insns = s.history.parent.state.block().disassembly.insns  # type: ignore[attr-defined]
         src_insn = [insn for insn in insns if insn.address == js][0]
         return src_insn.address + src_insn.size
 
@@ -550,6 +551,8 @@ class Angr:
     def get_prev_insn(self, thing: int, sym: Optional[Symbol] = None) -> Optional[capstone.CsInsn]:
         # Use capstone, since pyvex does not know too many instructions
         addr = self.thing_to_address(thing)
+        if addr is None:
+            return None
         return self.get_insn(addr-1, sym, exact=False)
 
     def prev_insn_addr(self, addr: int) -> Optional[int]:
@@ -566,7 +569,7 @@ class Angr:
             insn = next(cs)
         except StopIteration:
             return None
-        self.disasm_one_cache[addr] = insn
+        self.disasm_one_cache[addr] = insn  # type: ignore[assignment]
         return insn
 
     def disasm_sym(self, sym: Symbol) -> Optional[List[capstone.CsInsn]]:
@@ -611,10 +614,14 @@ class Angr:
         Returns:
             The capstone.CsInsn instruction if found, None otherwise.
         """
-        if isinstance(thing, (capstone.CsInsn, angr.block.CapstoneInsn)):
+        if isinstance(thing, capstone.CsInsn):
             return thing
+        if hasattr(thing, 'address') and hasattr(thing, 'mnemonic'):  # Check for CapstoneInsn-like
+            return thing  # type: ignore[return-value]
 
         ip = self.thing_to_address(thing)
+        if ip is None:
+            return None
         try:
             sym = self.get_sym(ip, exact=False, hint=sym_hint)
         except ValueError:
@@ -622,9 +629,13 @@ class Angr:
 
         disasm_sym_cache = sym and self.disasm_sym(sym)
         if disasm_sym_cache is None:
+            if ip is None:
+                return None
             insn = self.disasm_one(ip)
             if not insn:
-                raise ValueError(f"Unknown instruction at {hex(ip)}")
+                if ip is not None:
+                    raise ValueError(f"Unknown instruction at {hex(ip)}")
+                return None
             return insn
 
         # Find the index of the instruction with an address equal or greater than ip
@@ -699,13 +710,14 @@ class Angr:
 
         hook_addr = self.get_sym_addr(sym)
         if hook_addr is not None:
-            if proc == self.step_func_proc_trace:
-                self.skipped_hooked_procedure.add(sym)
-            elif skip_to_ret:
-                self.fastpath_to_ret_hooked_procedures.add(sym)
-            else:
-                self.fastpath_to_out_hooked_procedures.add(sym)
-            self.proj.hook(hook_addr, proc, sym.size, replace=replace)
+            if sym is not None:
+                if proc == self.step_func_proc_trace:
+                    self.skipped_hooked_procedure.add(sym)
+                elif skip_to_ret:
+                    self.fastpath_to_ret_hooked_procedures.add(sym)
+                else:
+                    self.fastpath_to_out_hooked_procedures.add(sym)
+                self.proj.hook(hook_addr, proc, sym.size, replace=replace)
 
     def parse_interrupt_table(self) -> None:
         interrupt_table = arch.parse_interrupt_table(self.proj)
@@ -717,11 +729,11 @@ class Angr:
     def is_interrupt_handler_addr(self, thing: Any) -> bool:
         ip = self.thing_to_address(thing)
 
-        return ip in self.addr_to_vectors
+        return ip is not None and ip in self.addr_to_vectors
     
     def is_exception_addr(self, thing: Any) -> bool:
         ip = self.thing_to_address(thing)
-        if ip not in self.addr_to_vectors:
+        if ip is None or ip not in self.addr_to_vectors:
             return False
 
         vectors = self.addr_to_vectors[ip]
