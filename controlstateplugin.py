@@ -1,19 +1,20 @@
 # Copyright 2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
-import angr
-import capstone
-import copy
 from typing import Any, Dict, List, Optional
+import copy
+from angr.sim_state import SimState
+from angr.state_plugins.plugin import SimStatePlugin
+import capstone
 
 from arch import arch
 
-class ControlStatePlugin(angr.SimStatePlugin):
+class ControlStatePlugin(SimStatePlugin):
     STEP_TIMEOUT: int = 10
 
-    def __init__(self, angr_mgr, detailed_trace:bool, branches:List[Dict], done_branches:int):
+    def __init__(self, angr_mgr: Any, detailed_trace: bool, branches: List[Dict[str, Any]], done_branches: int) -> None:
         super(ControlStatePlugin, self).__init__()
         self.done_branches = done_branches
-        self.branches:List[Dict] = branches
+        self.branches: List[Dict[str, Any]] = branches
         self.backtracking = False
         self.max_depth = 0x10000    # Just if something goes wrong
         self.stop_depth = 0
@@ -23,14 +24,14 @@ class ControlStatePlugin(angr.SimStatePlugin):
         self.only_symbols = None
         self.__last_insn = None
         self.diverged = False
-        self.expected_ip:Optional[int] = None
+        self.expected_ip: Optional[int] = None
         self.in_simulated = True
         self.no_callees = False
         self.angr_mgr = angr_mgr
         self.arch = arch.controlStatePluginArch()
 
-    @angr.SimStatePlugin.memo
-    def copy(self, memo) -> 'ControlStatePlugin':
+    @SimStatePlugin.memo
+    def copy(self, memo: Any) -> 'ControlStatePlugin':  # pylint: disable=unused-argument
         c = copy.copy(self)
         c.arch = copy.copy(self.arch)
         return c
@@ -44,12 +45,12 @@ class ControlStatePlugin(angr.SimStatePlugin):
         br = self.current_branch
         return br is not None and self.last_insn is not None and br['from_ip'] == self.last_insn.address
     
-    def update(self, s:angr.SimState):
+    def update(self, s: SimState) -> None:
         ip = self.angr_mgr.state_ip(s)
         self.__last_insn = None if ip is None else self.angr_mgr.get_insn(ip)
 
     @property
-    def last_insn(self) -> capstone.CsInsn:
+    def last_insn(self) -> Optional[capstone.CsInsn]:
         return self.__last_insn
 
     def trace_finished(self) -> bool:
