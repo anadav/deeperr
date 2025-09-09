@@ -106,7 +106,6 @@ class KProbesRecorder(Recorder):
                      probe_offset = offset,
                      extra = extra)
 
-#        self.kprobes[key] = kprobe
         return kprobe
 
     def set_ret_probes(self, syms: Set[Symbol]) -> List[Any]:
@@ -338,7 +337,7 @@ class KProbesRecorder(Recorder):
                             sim_syms: Iterable[Symbol]) -> None:
         failure = {
             'syscall': syscall.syscall,
-            'errcode': -syscall.result,  # type: ignore[operator]  # syscall.result is int, but type checker doesn't know
+            'errcode': -syscall.result if isinstance(syscall.result, int) and syscall.result < 0 else 0,
             'trace_id': len(self.traces),
             'pid': pid,
             'probe_addrs': probe_addrs,
