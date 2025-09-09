@@ -2,18 +2,16 @@
 # SPDX-License-Identifier: BSD-2-Clause
 from typing import Optional, Set, List, Dict, Tuple, Any, Union
 import re
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from collections import defaultdict
 
-import syscall
-import itertools
 from angrmgr import Angr
 from arch import arch
 from cle.backends.symbol import Symbol
 from ftrace import Ftrace
 from prmsg import pr_msg, Pbar
 from reporter import Reporter
-from syscall import SyscallInfo, ErrorcodeInfo
+from syscall import SyscallInfo
 
 class IntelPTReporter(Reporter):
     branch_regex = re.compile(
@@ -276,75 +274,6 @@ class IntelPTReporter(Reporter):
 
         return
 
-    def find_time(self, trace:List[str], time:float, before:bool) -> Optional[int]:
-        """Find the index of the first entry with the given time"""
-        # Bisect to find the time, but gracefully handle entries with no time
-        s = 0
-        e = len(trace)
-        found = None
-        while s < e:
-            mid = (s + e) // 2
-            # Only consider branch entries since their time is in sync with
-            # the time we look for. If we do not have such entry, go forward
-            # and then backward until we find one.
-            for i in itertools.chain(range(mid, len(trace)), range(mid, -1, -1)):
-                m = self.branch_regex.match(trace[i])
-                if m is not None:
-                    break
-            if m is None:
-                return None
-            d = m.groupdict()
-            e_time = float(d['time'])
-            if e_time < time:
-                if before:
-                    found = max(mid, found or mid)
-                s = mid + 1
-            elif e_time == time:
-                if before:
-                    e = mid - 1
-                    found = min(mid - 1, found or mid - 1)
-                else:
-                    s = mid + 1
-                    found = max(mid + 1, found or mid + 1)
-            else: # e_time > time
-                if not before:
-                    found = min(mid, found or mid)
-                e = mid
-
-        return found
-
-    @staticmethod
-    def search_in_chunk(args):
-        chunk, regex_pattern, start_line = args
-        matches = []
-
-        for i, line in enumerate(chunk, start_line):
-            match = regex_pattern.match(line)
-            if match:
-                matches.append(i)
-
-        return matches
-
-    @staticmethod
-    def chunk_lines(lines, chunk_size):
-        return [(lines[i:i + chunk_size], i) for i in range(0, len(lines), chunk_size)]
-
-    @staticmethod
-    def search_regex_multiprocess(lines: List[str], compiled_regex, max_workers=10, chunk_size=100):
-        all_matches = []
-
-        chunks = IntelPTReporter.chunk_lines(lines, chunk_size)
-
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(IntelPTReporter.search_in_chunk, (chunk, compiled_regex, start_line)) for chunk, start_line in chunks]
-
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    all_matches.extend(result)
-
-        return all_matches
-    
     def skip_fentry_entries(self, trace:List[Dict]) -> List[Dict]:
         """Skip all fentry entries in the trace"""
         result:List[Dict] = []
@@ -502,57 +431,6 @@ class IntelPTReporter(Reporter):
 
         return trace[enter_entry_idx:exit_entry_idx+1]
 
-    def get_errors(self, trace:List[str]) -> List[Dict]:
-        # The failures that were recorded had the wrong time source, so we need
-        # to find the time of the failure in the trace. However, the location of
-        # the failure in the trace, as indicated by the syscall entry/exit point
-        # if not in sync with the branch trace. So we find the time of the
-        # failure and would later find the branches in between. 
-        err_list = []
-        unmatched_exits = 0
-        matched_syscalls = []
-        enter_pid_dict = {}
-
-        pr_msg("finding failures in trace...", level = "INFO")
-
-        line_nums = self.search_regex_multiprocess(trace, Ftrace.complete_exit_regex)
-
-        parsed = [(n, self.parse_trace_entry(trace[n])) for n in line_nums]
-
-        for _, syscall_info in parsed:
-            assert syscall_info is not None
-
-            syscall_type = syscall_info["type"]
-            pid = syscall_info["pid"]
-
-            if syscall_type == "syscall_enter":
-                enter_pid_dict[pid] = syscall_info
-
-            elif syscall_type == "syscall_exit":
-                if pid in enter_pid_dict:
-                    matched_syscalls.append((enter_pid_dict[pid], syscall_info))
-                    del enter_pid_dict[pid]
-                else:
-                    #matched_syscalls.append((None, line_num))
-                    unmatched_exits += 1
-
-        if unmatched_exits > 0:
-            pr_msg(f"encountered {unmatched_exits} with incomplete trace", level = "INFO")
-        
-        for (entry, exit) in matched_syscalls:
-            errcode = syscall.ret_to_err(exit['syscall_ret'])
-            if errcode is None:
-                continue
-
-            f = {'start_time': entry['time'],
-                'end_time': exit['time'],
-                'errcode': -errcode,
-                'syscall_nr': exit['syscall'],
-                'pid': exit['pid'],
-                'args': entry['syscall_args']}
-            err_list.append(f)
-
-        return err_list
 
     # TODO: Combine with kprobes function of remove_untracked_from_snapshot()
     def remove_untracked_branches(self, branches: List[Dict]) -> List[Dict]:
