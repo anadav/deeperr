@@ -167,7 +167,8 @@ def main() -> None:
     parser.add_argument('--perf', '-f', default='perf', metavar='PATH', help='location of perf')
     parser.add_argument('--debug', '-d', action='store_true', dest='debug', help='debug mode verbosity')
     parser.add_argument('--llvm-symbolizer', '-y', action='store', dest='llvm_symbolizer', default='llvm-symbolizer', help='path to llvm-symbolizer')
-    parser.add_argument('--snapshot-size', '-z', action='store', dest='snapshot_size', type=int, default=1048576, help='snapshot size in bytes (default: 1MB, try smaller values like 65536 for faster kprobes recording)')
+    parser.add_argument('--snapshot-size', '-z', action='store', dest='snapshot_size', type=int, default=1, 
+                        help='snapshot size in MB (default: 1MB, use larger values like 5 or 10 if you get "failed to capture full snapshot" errors)')
     parser.add_argument('--tmp', '-t', action='store', dest='tmp_path', default='/tmp', type=valid_path, help='tmp path')
     parser.add_argument('--syscall', '-s', action='store', dest='syscall', help='failing syscall number to track')
     parser.add_argument('--quiet', '-q', action='store_true', dest='quiet', help='quiet mode')
@@ -467,10 +468,12 @@ def main() -> None:
             pr_msg("CPU does not support Intel PT", level="ERROR")
 
         recorder_cls: Any = KProbesRecorder if kprobes else IntelPTRecorder
+        # Convert snapshot size from MB to bytes
+        snapshot_size_bytes = args.snapshot_size * 1024 * 1024
         a = recorder_cls(
             perf=args.perf,
             objs=objs,
-            snapshot_size=args.snapshot_size,
+            snapshot_size=snapshot_size_bytes,
             errcode_filter=errcode_filter,
             syscall_filter=syscall_filter,
             occurrences_filter=occurrences_filter,
