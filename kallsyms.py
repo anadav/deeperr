@@ -6,6 +6,7 @@ import pathlib
 import io
 import struct
 import os
+import sys
 import zstandard as zstd
 import lief
 from intervaltree import IntervalTree
@@ -43,14 +44,19 @@ def get_vmlinux(user_option:Optional[List[io.BufferedReader]]) -> List[io.Buffer
         except PermissionError:
             pr_msg(f'Could not open vmlinux file {vmlinux}', level='ERROR')
 
-    pr_msg('Could not find vmlinux file, trying to continue without one', level='ERROR')
-    pr_msg('''Consider installing symbols using:
-                sudo apt install linux-image-$(uname -r)-dbgsym [deb/ubuntu]
-                sudo dnf debuginfo-install kernel [fedora]
-                sudo pacman -S linux-headers [arch]
-                sudo emerge -av sys-kernel/linux-headers [gentoo]
-            ''', level='WARN')
-    return user_option
+    pr_msg('ERROR: vmlinux file is required but could not be found', level='ERROR')
+    pr_msg('''The vmlinux file must be available in one of these locations:
+    - /usr/lib/debug/boot/vmlinux-$(uname -r)
+    - /boot/vmlinux-$(uname -r)
+    - Or specify it using: --vmlinux /path/to/vmlinux
+    
+Install kernel debug symbols using:
+    sudo apt install linux-image-$(uname -r)-dbgsym [deb/ubuntu]
+    sudo dnf debuginfo-install kernel [fedora]
+    sudo pacman -S linux-headers [arch]
+    sudo emerge -av sys-kernel/linux-headers [gentoo]
+            ''', level='ERROR')
+    sys.exit(1)
 
 def find_module_dbg(module_name:str):
     pathes = [f'/usr/lib/debug/lib/modules/{os.uname().release}']
@@ -120,7 +126,11 @@ class Kallsyms:
         for syms in bpf_syms + builtin_syms:
             min_addr = self.__get_min_addr(syms)
             max_addr = self.__get_max_addr(syms)
-            self.intervals[min_addr:max_addr] = syms
+            # Skip zero-size intervals which IntervalTree doesn't allow
+            if min_addr < max_addr:
+                self.intervals[min_addr:max_addr] = syms
+            else:
+                logging.debug(f"Skipping zero-size interval for symbols: {syms[0][0] if syms else 'unknown'}")
 
         self.exes = dict()
 

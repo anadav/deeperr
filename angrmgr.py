@@ -6,6 +6,7 @@ import os
 import sys
 import bisect
 import io
+import logging
 
 import angr
 from angr.sim_state import SimState
@@ -191,6 +192,11 @@ class Angr:
 
             # filter out segments with negative size (3rd)
             segments = [s for s in segments if s[2] > 0]
+
+            # Skip if no valid segments remain
+            if not segments:
+                logging.warning(f"No valid segments found for {exe_name}, skipping")
+                continue
 
             cle = angr.cle.Blob(exe['path'] or exe_name, f, segments=segments, arch=arch.arch_name,
                                 base_addr = exe['base_addr'],

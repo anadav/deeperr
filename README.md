@@ -40,7 +40,15 @@ Feel free to integrate this snippet into your documentation where it fits best.
    sudo apt install libcapstone4 || sudo apt install libcapstone3
    ```
 
-3. Install the kernel debug symbols
+3. **REQUIRED:** Install the kernel debug symbols (vmlinux)
+   
+   The syscall-failure-analyzer **requires** kernel debug symbols to function properly. 
+   The vmlinux file must be available in one of the following locations:
+   - `/usr/lib/debug/boot/vmlinux-$(uname -r)`
+   - `/boot/vmlinux-$(uname -r)`
+   - Or explicitly specified via the `--vmlinux` command-line option
+   
+   To install kernel debug symbols:
    ```bash
    codename=$(lsb_release -c | awk  '{print $2}')
    sudo tee /etc/apt/sources.list.d/ddebs.list << EOF
@@ -55,6 +63,12 @@ Feel free to integrate this snippet into your documentation where it fits best.
    sudo apt update
    sudo apt install linux-image-`uname -r`-dbgsym
    ```
+   
+   **Note:** If the vmlinux file is not found, the tool will fail to initialize properly.
+   For other distributions, use the appropriate commands:
+   - **Fedora:** `sudo dnf debuginfo-install kernel`
+   - **Arch:** `sudo pacman -S linux-headers`
+   - **Gentoo:** `sudo emerge -av sys-kernel/linux-headers`
 
 4. *Recommended:* Installing the Linux source code is essential for any
    meaningful analysis using syscall-failure-analyzer output. If you have access to the source code
@@ -206,7 +220,7 @@ The tool provides a variety of command-line options to customize its behavior:
     - `--occurrences OCCURRENCES, -n OCCURRENCES`: Specify occurrences to record
 
 - **Advanced Options**
-    - `--vmlinux OBJS [OBJS ...], -l OBJS [OBJS ...]`: Specify the location of the vmlinux file or other modules
+    - `--vmlinux OBJS [OBJS ...], -l OBJS [OBJS ...]`: Specify the location of the vmlinux file (required if not in standard locations) or other kernel modules
     - `--path SRC_PATH, -p SRC_PATH`: Specify the path to source code
     - `--perf FileType('x'), -f FileType('x')`: Specify the location of perf
     - `--debug, -d`: Enable debug mode verbosity
