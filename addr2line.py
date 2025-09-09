@@ -32,10 +32,11 @@ class Addr2Line:
         self.__addr2line = addr2line
 
     @staticmethod
-    def get_instance():
+    def get_instance() -> 'Addr2Line':
         """ Static access method. """
         if Addr2Line.__instance == None:
             Addr2Line()
+        assert Addr2Line.__instance is not None
         return Addr2Line.__instance
 
     def __init__(self):
