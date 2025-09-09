@@ -1,7 +1,7 @@
 # Copyright 2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
 import inspect
-from typing import Optional, Set, Type, Tuple
+from typing import Optional, Set, Type, Tuple, cast
 from angr.sim_state import SimState
 from angr.sim_procedure import SimProcedure
 from angr.errors import SimValueError
@@ -18,8 +18,7 @@ def state_ip(s: SimState) -> Optional[int]:
 
 def track_to_ret(proc: SimProcedure) -> None:
     state = proc.state
-    control = state.control  # type: ignore[attr-defined]
-    assert isinstance(control, ControlStatePlugin)
+    control = cast(ControlStatePlugin, state.control)  # type: ignore[attr-defined]
 
     if control.backtracking:
         return
@@ -51,8 +50,7 @@ def track_to_ret(proc: SimProcedure) -> None:
 
 def track_out_of_syms(proc: SimProcedure, sym_names: Set[str]) -> None:
     state = proc.state
-    control = state.control  # type: ignore[attr-defined]
-    assert isinstance(control, ControlStatePlugin)
+    control = cast(ControlStatePlugin, state.control)  # type: ignore[attr-defined]
 
     if control.backtracking:
         return
@@ -100,8 +98,7 @@ class ReturnProcedure(SimProcedure):
         super(ReturnProcedure, self).__init__()
 
     def run(self):  # type: ignore[override]
-        control = self.state.control  # type: ignore[attr-defined]
-        assert isinstance(control, ControlStatePlugin)
+        control = cast(ControlStatePlugin, self.state.control)  # type: ignore[attr-defined]
 
         if control.backtracking:
             self.ret()
@@ -111,7 +108,8 @@ class ReturnProcedure(SimProcedure):
             return None
         
         # Force the correct return address
-        self.ret_to = control.current_branch['to_ip']  # type: ignore[attr-defined]
+        if control.current_branch is not None:
+            self.ret_to = control.current_branch['to_ip']  # type: ignore[attr-defined]
         r = self.ret()
         self.ret_to = None  # type: ignore[attr-defined]
         control.next_branch()
@@ -158,8 +156,7 @@ class RepHook(BaseRepHook):
         super().__init__(mnemonic.split(" ")[1])
 
     def trace_to_next(self, state: SimState) -> None:
-        c = state.control  # type: ignore[attr-defined]
-        assert isinstance(c, ControlStatePlugin)
+        c = cast(ControlStatePlugin, state.control)  # type: ignore[attr-defined]
         if not c.backtracking:
             addr = state.addr  # type: ignore[attr-defined]
             br = c.current_branch
@@ -187,11 +184,14 @@ class RetpolineProcedure(SimProcedure):
     def run(self):  # type: ignore[override]
         state = self.state
         reg = getattr(state.regs, self.reg)
-        control = state.control  # type: ignore[attr-defined]
+        control = cast(ControlStatePlugin, state.control)  # type: ignore[attr-defined]
 
         if control.backtracking:
             return self.jump(reg)
 
+        if control.current_branch is None:
+            control.diverged = True
+            return self.jump(reg)
         trace_from_ip = control.current_branch['from_ip']
         trace_to_ip = control.current_branch['to_ip']
         control.expected_ip = trace_to_ip
