@@ -9,7 +9,7 @@ from ptrace.debugger.process import PtraceProcess
 from ptrace.syscall.ptrace_syscall import PtraceSyscall
 
 from arch import arch
-from cle.backends import Symbol
+from cle.backends.symbol import Symbol
 from capstone import CsInsn
 
 from kcore import Kcore
@@ -47,7 +47,7 @@ class KProbesRecorder(Recorder):
         'fortify_panic',
     }
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         self.pending_signals = defaultdict(deque)
         self.kprobes = dict()
 
@@ -56,7 +56,7 @@ class KProbesRecorder(Recorder):
         super().__init__(**kwargs)
         self.ftrace = Ftrace.main_instance(self.angr_mgr)
 
-    def set_probes(self, addrs:Iterable[int]) -> List[int]:
+    def set_probes(self, addrs: Iterable[int]) -> List[Any]:
         probes = list()
 
         for addr in Pbar("setting probes", items=addrs, unit="kprobe"):
@@ -77,7 +77,7 @@ class KProbesRecorder(Recorder):
     def get_kprobe(self,
                    addr: int,
                    ret: bool = False,
-                   extra: str = ''):
+                   extra: str = '') -> Any:
         key = (addr, ret)
         assert key is not None
 
@@ -106,7 +106,7 @@ class KProbesRecorder(Recorder):
 #        self.kprobes[key] = kprobe
         return kprobe
 
-    def set_ret_probes(self, syms:Set[Symbol]) -> List:
+    def set_ret_probes(self, syms: Set[Symbol]) -> List[Any]:
         events = list()
         for sym in Pbar("setting ret probes", items=syms, unit="symbol"):
             e = self.get_kprobe(addr = sym.rebased_addr, ret=True, extra='ret=$retval')
@@ -117,7 +117,7 @@ class KProbesRecorder(Recorder):
             e.enable = True
         return events
 
-    def record(self, args:List[str]):
+    def record(self, args: List[str]) -> int:
         """
         Record function to trace kernel failures using kprobes
 
@@ -254,8 +254,10 @@ class KProbesRecorder(Recorder):
         ftrace.pid = []
         ftrace.event_pid = []
         sys_exit_event.trigger = None
+        
+        return len(self.failures)
 
-    def get_ftrace_snapshot_syms(self, snapshot:List[Dict[str,Any]]) -> Set[Symbol]:
+    def get_ftrace_snapshot_syms(self, snapshot: List[Dict[str, Any]]) -> Set[Symbol]:
         assert self.angr_mgr is not None
 
         syms = {entry['callstack_syms'][0] for entry in snapshot
@@ -270,7 +272,7 @@ class KProbesRecorder(Recorder):
         return syms
             
 
-    def remove_untracked_from_snapshot(self, snapshot:List[Dict], syms:Optional[Set[Symbol]]=None) -> List[Dict]:
+    def remove_untracked_from_snapshot(self, snapshot: List[Dict], syms: Optional[Set[Symbol]] = None) -> List[Dict]:
         assert self.angr_mgr is not None
 
         entry_syms = {self.angr_mgr.get_sym(s) for s in arch.syscall_entry_points}
@@ -330,9 +332,9 @@ class KProbesRecorder(Recorder):
     def log_kprobes_failure(self,
                             syscall: PtraceSyscall,
                             trace: List[Dict[str, Union[int, str, float, List]]],
-                            pid:int,
-                            probe_addrs:Iterable[int],
-                            sim_syms:Iterable[Symbol]):
+                            pid: int,
+                            probe_addrs: Iterable[int],
+                            sim_syms: Iterable[Symbol]) -> None:
         failure = {
             'syscall': syscall.syscall,
             'errcode': -syscall.result,
@@ -349,7 +351,7 @@ class KProbesRecorder(Recorder):
         self.traces.append(trace) # type: ignore
         self.failures.append(failure)
 
-    def rerun_get_snapshot(self, process:PtraceProcess, failing_syscall:PtraceSyscall) -> List[Dict[str, Any]]:
+    def rerun_get_snapshot(self, process: PtraceProcess, failing_syscall: PtraceSyscall) -> List[Dict[str, Any]]:
         ftrace = Ftrace.main_instance()
         ftrace.clear_snapshot()
         ftrace.tracing_on = True
@@ -366,10 +368,10 @@ class KProbesRecorder(Recorder):
         s = ftrace.get_snapshot(self.SKIP_TRACE_EVENTS, self.RESUME_TRACE_EVENTS)
         return s
     
-    def cleanup_callstack(self, trace:List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def cleanup_callstack(self, trace: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         addr_to_sym:Dict[int, Symbol] = dict()
 
-        def get_sym(addr):
+        def get_sym(addr: int) -> Optional[Symbol]:
             if addr in addr_to_sym:
                 return addr_to_sym[addr]
             
@@ -430,7 +432,7 @@ class KProbesRecorder(Recorder):
             l['callstack'] = callstack
         return trace
 
-    def wait_for_syscall(self, process:Optional[PtraceProcess]) -> Optional[PtraceSyscall]:
+    def wait_for_syscall(self, process: Optional[PtraceProcess]) -> Optional[PtraceSyscall]:
         while len(self.dbg.list) != 0:
             process_filter = [process] if process is not None else self.dbg.list
             stopped = filter(lambda p: p.is_stopped, process_filter)
@@ -453,7 +455,7 @@ class KProbesRecorder(Recorder):
                 is_syscall = True
                 trapped_process = e.process
             except ptrace.debugger.ProcessExit as e:
-                e.process.processExited(e)
+                e.process.processExited(e)  # type: ignore[attr-defined]
                 trapped_process = e.process
             except ptrace.debugger.ProcessSignal as e:
                 self.pending_signals[e.process.pid].append(e.signum)
@@ -503,7 +505,7 @@ class KProbesRecorder(Recorder):
 
         return None
 
-    def remove_snapshot_irqs(self, snapshot:List[Dict]) -> List[Dict]:
+    def remove_snapshot_irqs(self, snapshot: List[Dict]) -> List[Dict]:
         """
         Removes all IRQ-related events from a given snapshot, including all
         events between an irqenter event and its corresponding irqexit event.
@@ -522,10 +524,10 @@ class KProbesRecorder(Recorder):
                 filtered_snapshot.append(event)
         return filtered_snapshot
 
-    def analyze_probe_insns(self, sym:Symbol) -> Set[CsInsn]:
+    def analyze_probe_insns(self, sym: Symbol) -> Set[CsInsn]:
         assert self.angr_mgr is not None
 
-        def collect(sym: Symbol, insn:CsInsn, **kwargs):
+        def collect(sym: Symbol, insn: CsInsn, **kwargs) -> None:
             assert self.angr_mgr is not None
 
             # Do not put probes on the first instruction of a function, as we
@@ -575,7 +577,7 @@ class KProbesRecorder(Recorder):
 
     # Returns addresses of probes, set of symbols to trace entry, set of symbols
     # to simulate.
-    def tracking_probe_addrs(self, syms:Set[Symbol]) -> Tuple[Set[int], Set[Symbol]]:
+    def tracking_probe_addrs(self, syms: Set[Symbol]) -> Tuple[Set[int], Set[Symbol]]:
         probe_syms:Set[Symbol] = set()
         probe_insns:Set[CsInsn] = set()
 
