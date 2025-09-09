@@ -195,8 +195,8 @@ class Kallsyms:
             build_id = Kallsyms.get_build_id(binary)
             live_build_id = Kallsyms.get_module_build_id(obj_name)
             if live_build_id != build_id:
-                pr_msg(f"Build ID mismatch for {obj_name}, continuing anyway", level='WARNING')
-                pr_msg(f"  Debug symbols may not match the loaded module", level='WARNING')
+                pr_msg(f"Build ID mismatch for {obj_name}, continuing anyway", level='WARN')
+                pr_msg(f"  Debug symbols may not match the loaded module", level='WARN')
 
             sections = Kallsyms.get_ro_sections(binary)
 
@@ -265,8 +265,11 @@ class Kallsyms:
                 if n_ovelapping == 1:
                     break
             if n_ovelapping > 1:
-                pr_msg(f"Could not resolve overlapping sections for {exe}", level='ERROR')
-                raise Exception(f"Could not resolve overlapping sections for {exe}")
+                pr_msg(f"Could not resolve overlapping sections for {exe}, skipping", level='WARN')
+                pr_msg(f"  This module's symbols may not be available", level='WARN')
+                # Mark this exe for removal
+                if exe not in to_remove_exes:
+                    to_remove_exes.append(exe)
 
         for exe in to_remove_exes:
             del self.exes[exe]
@@ -275,7 +278,7 @@ class Kallsyms:
         path = obj_basenames['vmlinux'].name if 'vmlinux' in obj_basenames else None
 
         if path is None:
-            pr_msg(f'Could not find vmlinux file, continuing without kernel symbols', level='WARNING')
+            pr_msg(f'Could not find vmlinux file, continuing without kernel symbols', level='WARN')
             pr_msg(f'Consider installing symbols using:', level='INFO')
             pr_msg(f'    sudo apt install linux-image-$(uname -r)-dbgsym [deb/ubuntu]', level='INFO')
             pr_msg(f'    sudo dnf debuginfo-install kernel [fedora]', level='INFO')
@@ -303,7 +306,8 @@ class Kallsyms:
         build_id = Kallsyms.get_build_id(binary)
         live_build_id = Kallsyms.get_build_id_from_kernel_notes(pathlib.Path("/sys/kernel/notes"))
         if live_build_id != build_id:
-            raise Exception(f"Build ID mismatch for vmlinux")
+            pr_msg(f"Build ID mismatch for vmlinux, continuing anyway", level='WARN')
+            pr_msg(f"  Debug symbols may not match the running kernel", level='WARN')
 
         sections = {section.name:section for section in binary.sections}
         sections_to_alloc = [section for section in binary.sections
