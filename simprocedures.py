@@ -2,21 +2,23 @@
 # SPDX-License-Identifier: BSD-2-Clause
 import inspect
 from typing import Optional, Set, Type, Tuple
-import angr
+from angr.sim_state import SimState
+from angr.sim_procedure import SimProcedure
+from angr.errors import SimValueError
+from angr.exploration_techniques.tracer import RepHook as BaseRepHook
 from controlstateplugin import ControlStatePlugin
 from arch import arch
-import capstone
 
-def state_ip(s: angr.SimState) -> Optional[int]:
+def state_ip(s: SimState) -> Optional[int]:
     v = s.registers.load(arch.ip_reg_name)
     try:
         return s.solver.eval_one(v)
-    except angr.SimValueError:
+    except SimValueError:
         return None
 
-def track_to_ret(proc: angr.SimProcedure) -> None:
+def track_to_ret(proc: SimProcedure) -> None:
     state = proc.state
-    control = state.control
+    control = state.control  # type: ignore[attr-defined]
     assert isinstance(control, ControlStatePlugin)
 
     if control.backtracking:
@@ -25,7 +27,7 @@ def track_to_ret(proc: angr.SimProcedure) -> None:
     ip = state_ip(state)
     assert(ip is not None)
     # TODO: Check if we need better way
-    ret_ip = state.callstack.ret_addr
+    ret_ip = state.callstack.ret_addr  # type: ignore[attr-defined]
     assert(ret_ip is not None and ret_ip != 0)
     # TODO: let the arch give the address width
     if ret_ip < 0:
@@ -47,9 +49,9 @@ def track_to_ret(proc: angr.SimProcedure) -> None:
             'from_offset': None
         })
 
-def track_out_of_syms(proc: angr.SimProcedure, sym_names: Set[str]) -> None:
+def track_out_of_syms(proc: SimProcedure, sym_names: Set[str]) -> None:
     state = proc.state
-    control = state.control
+    control = state.control  # type: ignore[attr-defined]
     assert isinstance(control, ControlStatePlugin)
 
     if control.backtracking:
@@ -67,7 +69,7 @@ def track_out_of_syms(proc: angr.SimProcedure, sym_names: Set[str]) -> None:
         control.diverged = True
         control.expected_ip = None
 
-class CopyProcedure(angr.SimProcedure):
+class CopyProcedure(SimProcedure):
     #pylint:disable=arguments-differ
 
     def run(self, dst_addr, src_addr, limit):  # type: ignore[override]
@@ -80,7 +82,7 @@ class CopyProcedure(angr.SimProcedure):
             limit = self.state.solver.BVS('limit', arch.address_width)
             self.state.add_constraints(old_limit == limit)
 
-        self.state.add_constraints(limit <= self.state.libc.max_memcpy_size)
+        self.state.add_constraints(limit <= self.state.libc.max_memcpy_size)  # type: ignore[attr-defined]
         #self.state.add_constraints(copied <= self.state.libc.max_memcpy_size)
         self.state.add_constraints(copied <= limit)
 
@@ -93,12 +95,12 @@ class CopyProcedure(angr.SimProcedure):
     def __repr__(self) -> str:
         return 'CopyProcedure'
 
-class ReturnProcedure(angr.SimProcedure):
+class ReturnProcedure(SimProcedure):
     def __init__(self) -> None:
         super(ReturnProcedure, self).__init__()
 
     def run(self):  # type: ignore[override]
-        control = self.state.control
+        control = self.state.control  # type: ignore[attr-defined]
         assert isinstance(control, ControlStatePlugin)
 
         if control.backtracking:
@@ -109,14 +111,14 @@ class ReturnProcedure(angr.SimProcedure):
             return None
         
         # Force the correct return address
-        self.ret_to = control.current_branch['to_ip']
+        self.ret_to = control.current_branch['to_ip']  # type: ignore[attr-defined]
         r = self.ret()
-        self.ret_to = None
+        self.ret_to = None  # type: ignore[attr-defined]
         control.next_branch()
         return r
 
-class ProcedureWrapper(angr.SimProcedure):
-    def __init__(self, proc_class: Type[angr.SimProcedure], limits: Optional[Tuple[Optional[int], Optional[int]]] = None) -> None:
+class ProcedureWrapper(SimProcedure):
+    def __init__(self, proc_class: Type[SimProcedure], limits: Optional[Tuple[Optional[int], Optional[int]]] = None) -> None:
         super(ProcedureWrapper, self).__init__()
         self.proc_class = proc_class
         sig = inspect.signature(proc_class.run)
@@ -151,21 +153,21 @@ class ProcedureWrapper(angr.SimProcedure):
         
         return result.sign_extend(arch.address_width - result.length)
 
-class RepHook(angr.exploration_techniques.tracer.RepHook):
+class RepHook(BaseRepHook):
     def __init__(self, mnemonic: str) -> None:
         super().__init__(mnemonic.split(" ")[1])
 
-    def trace_to_next(self, state: angr.SimState) -> None:
-        c = state.control
+    def trace_to_next(self, state: SimState) -> None:
+        c = state.control  # type: ignore[attr-defined]
         assert isinstance(c, ControlStatePlugin)
         if not c.backtracking:
-            addr = state.addr
+            addr = state.addr  # type: ignore[attr-defined]
             br = c.current_branch
             while br is not None and br['from_ip'] == addr and br['to_ip'] == addr:
                 c.next_branch()
                 br = c.current_branch
 
-    def run(self, state: angr.SimState, procedure=None, *arguments, **kwargs) -> None:  # type: ignore[override]
+    def run(self, state: SimState, procedure=None, *arguments, **kwargs) -> None:  # type: ignore[override]
         self.trace_to_next(state)
 
         if procedure is not None:
@@ -177,7 +179,7 @@ class RepHook(angr.exploration_techniques.tracer.RepHook):
         super().run(state)
 
 # TODO: Move to AngrSim
-class RetpolineProcedure(angr.SimProcedure):
+class RetpolineProcedure(SimProcedure):
     def __init__(self, reg: str) -> None:
         super(RetpolineProcedure, self).__init__()
         self.reg = reg
@@ -185,7 +187,7 @@ class RetpolineProcedure(angr.SimProcedure):
     def run(self):  # type: ignore[override]
         state = self.state
         reg = getattr(state.regs, self.reg)
-        control = state.control
+        control = state.control  # type: ignore[attr-defined]
 
         if control.backtracking:
             return self.jump(reg)
@@ -196,7 +198,7 @@ class RetpolineProcedure(angr.SimProcedure):
         angr_mgr = control.angr_mgr
 
         current_state_ip = state_ip(state)
-        prev_state_ip = state.history and state.history.parent and state.history.parent.addr
+        prev_state_ip = state.history and state.history.parent and state.history.parent.addr  # type: ignore[attr-defined]
 
         def in_retpoline(ip: int) -> bool:
             sym_name = angr_mgr.get_sym_name(ip)
