@@ -151,11 +151,12 @@ class Ftrace:
         self.current_tracer = 'nop'
         self.kprobe_event_clear()
         self.disable_snapshot()
-        if self.instance_name is not None:
+        if self.instance_name is not None and self.trace_path is not None:
             self.rmdir_instance(self.trace_path)
             main_instance = Ftrace.main_instance()
-            del main_instance.instances[self.instance_name]
-        self.trace_path = None
+            if main_instance.instances is not None:
+                del main_instance.instances[self.instance_name]
+        self.trace_path: Optional[pathlib.Path] = None
         self.deleted = True
 
     def __del__(self) -> None:
@@ -277,16 +278,16 @@ class Ftrace:
                 continue
 
             d = m.groupdict()
-            kprobe = self.KprobeEvent(self,
-                                        probe_type=d['probe_type'],
-                                        identifier=int(d['identifier']) if d['identifier'] else None,
-                                        event_type=d['event_type'],
-                                        module_name=d['module_name'],
-                                        event_name=d['event_name'],
-                                        target_function=d['target_function'],
-                                        probe_offset=int(d['probe_offset']) if d['probe_offset'] else 0,
-                                        extra=d['extra'],
-                                        prepopulated=True)
+            self.KprobeEvent(self,
+                             probe_type=d['probe_type'],
+                             identifier=int(d['identifier']) if d['identifier'] else None,
+                             event_type=d['event_type'],
+                             module_name=d['module_name'],
+                             event_name=d['event_name'],
+                             target_function=d['target_function'],
+                             probe_offset=int(d['probe_offset']) if d['probe_offset'] else 0,
+                             extra=d['extra'],
+                             prepopulated=True)
 
         self.kprobe_event_clear()
         self.kprobes_cleared = True
@@ -294,6 +295,8 @@ class Ftrace:
 
     def __read_available_filter_functions(self) -> None:
         self.available_filter_functions = set()
+        if self.trace_path is None:
+            raise ValueError("trace_path is not initialized")
         txt = self.trace_path.joinpath("available_filter_functions").read_text()
         for line in txt.splitlines():
             match = self.function_module_regex.match(line.strip())
@@ -312,14 +315,20 @@ class Ftrace:
 
     def read_cached(self, prop: str) -> str:
         if prop not in self.cache:
+            if self.trace_path is None:
+                raise ValueError("trace_path is not initialized")
             self.cache[prop] = self.trace_path.joinpath(prop).read_text().strip()
         return self.cache[prop]
 
     def write_cached(self, prop: str, content: str) -> None:
+        if self.trace_path is None:
+            raise ValueError("trace_path is not initialized")
         self.trace_path.joinpath(prop).write_text(content)
         self.cache[prop] = content
     
     def __read_available_tracers(self) -> None:
+        if self.trace_path is None:
+            raise ValueError("trace_path is not initialized")
         txt = self.trace_path.joinpath("available_tracers").read_text()
         self.available_tracers = txt.strip().split(' ')
 
@@ -360,7 +369,8 @@ class Ftrace:
         for base in range(start_table, stop_table, 16):
             offset = base - start_table
             code_offset, _, _ = struct.unpack('iiL', table[offset:offset + 16])
-            self.invalid_kprobe_addrs.append(base + code_offset)
+            if self.invalid_kprobe_addrs is not None:
+                self.invalid_kprobe_addrs.append(base + code_offset)
 
     def __read_static_call_table(self) -> None:
         table, start_table, stop_table = self.__read_kernel_table('__start_static_call_sites', '__stop_static_call_sites')
@@ -372,7 +382,8 @@ class Ftrace:
             addr = base + code_offset
             key = base + 4 + key_offset
             if not (key & STATIC_CALL_SITE_INIT):
-                self.invalid_kprobe_addrs.append(addr)
+                if self.invalid_kprobe_addrs is not None:
+                    self.invalid_kprobe_addrs.append(addr)
 
     def read_invalid_kprobe_addrs(self) -> None:
         if self.invalid_kprobe_addrs is not None:
@@ -458,6 +469,8 @@ class Ftrace:
 
     @property
     def kprobe_event_file_path(self) -> pathlib.Path:
+        if self.trace_path is None:
+            raise ValueError("trace_path is not initialized")
         return self.trace_path.joinpath("kprobe_events")
 
     def kprobe_event_open(self) -> None:
@@ -573,6 +586,8 @@ class Ftrace:
 
     @property
     def snapshot_file(self) -> pathlib.Path:
+        if self.trace_path is None:
+            raise ValueError("trace_path is not initialized")
         return self.trace_path.joinpath('snapshot')
 
     def disable_snapshot(self) -> None:
@@ -583,14 +598,20 @@ class Ftrace:
         self.snapshot_file.write_text('2')
 
     def get_bool(self, path: str) -> bool:
-        return self.trace_path.joinpath(path).read_text()[0] != 0
+        if self.trace_path is None:
+            raise ValueError("trace_path is not initialized")
+        return self.trace_path.joinpath(path).read_text()[0] != '0'
 
     def set_bool(self, path: str, enable: bool) -> None:
+        if self.trace_path is None:
+            raise ValueError("trace_path is not initialized")
         self.trace_path.joinpath(path).write_text(str(int(enable)))
 
     @property
     def irq_info(self) -> bool:
-        return self.trace_path.joinpath('options/irq-info').read_text()[0] != 0
+        if self.trace_path is None:
+            raise ValueError("trace_path is not initialized")
+        return self.trace_path.joinpath('options/irq-info').read_text()[0] != '0'
         
     @irq_info.setter
     def irq_info(self, enable: bool) -> None:
@@ -601,6 +622,8 @@ class Ftrace:
         if k in self.pipes:
             return self.pipes[k]
 
+        if self.trace_path is None:
+            raise ValueError("trace_path is not initialized")
         self.pipes[k] = self.trace_path.joinpath("trace_pipe").open("r")
         if is_async:
             fcntl_flags = fcntl.fcntl(self.pipes[k].fileno(), fcntl.F_GETFL)
@@ -657,7 +680,8 @@ class Ftrace:
                 callstack_addr = None if sd['sym'] == "[unknown/kretprobe'd]" else int(sd['addr'], 16)
                 if last_func_entry['callstack'] is None:
                     last_func_entry['callstack'] = list()
-                last_func_entry['callstack'].append(callstack_addr)
+                if isinstance(last_func_entry['callstack'], list):
+                    last_func_entry['callstack'].append(callstack_addr)
                 continue
 
             m = self.ftrace_regex_payload.match(l)
@@ -800,6 +824,8 @@ class Ftrace:
 
         def __init__(self, path: str, ftrace: 'Ftrace') -> None:
             self.ftrace = ftrace
+            if ftrace.trace_path is None:
+                raise ValueError("ftrace.trace_path is not initialized")
             self.path = ftrace.trace_path.joinpath('events/' + path)
             self.cache = dict()
 
@@ -888,7 +914,7 @@ class Ftrace:
             event_path = f'{event_type}/{event_name}'
 
             # Check if the event is already registered
-            if not prepopulated and ftrace.trace_path.joinpath(event_path).exists():
+            if not prepopulated and ftrace.trace_path is not None and ftrace.trace_path.joinpath(event_path).exists():
                 raise IOError(f'Event {event_path} already exists')
 
             super(ftrace.KprobeEvent, self).__init__(event_path, ftrace)
