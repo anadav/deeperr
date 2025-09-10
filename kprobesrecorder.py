@@ -186,9 +186,18 @@ class KProbesRecorder(Recorder):
 
         pr_msg('Getting trace events...', level='DEBUG')
         start_time = time.time()
-        trace_events = [
+        # Get and enable sys_enter event
+        e_class, e_subclass, filter = self.get_filter_string(exit=False)
+        sys_enter_event_name = f'{e_class}/{e_subclass}'
+        sys_enter_event = ftrace.get_event(sys_enter_event_name)
+        if filter is not None:
+            sys_enter_event.filter = filter
+        sys_enter_event.enable = True
+        pr_msg(f'Enabled event: {sys_enter_event_name}', level='DEBUG')
+        
+        trace_events = [sys_enter_event] + [
             ftrace.get_event(ev)
-            for ev in ['raw_syscalls/sys_enter'] + self.SKIP_TRACE_EVENTS + self.RESUME_TRACE_EVENTS
+            for ev in self.SKIP_TRACE_EVENTS + self.RESUME_TRACE_EVENTS
         ] + [sys_exit_event]
         pr_msg(f'Got {len(trace_events)} trace events in {time.time() - start_time:.2f}s', level='DEBUG')
        
@@ -200,8 +209,10 @@ class KProbesRecorder(Recorder):
             ftrace.current_tracer = 'nop'
             ftrace.func_filter = []
             ftrace.sym_addr = True           
+            # Don't disable syscall events - they need to stay enabled to detect failures
             for ev in trace_events:
-                ev.enable = False
+                if ev not in (sys_enter_event, sys_exit_event):
+                    ev.enable = False
             pr_msg(f'Cleanup done in {time.time() - start_time:.2f}s', level='DEBUG')
 
             pr_msg("waiting for failure...", level='TITLE', new_line_before=True)
@@ -350,15 +361,17 @@ class KProbesRecorder(Recorder):
                     untracked += 1
                     continue
 
-                for callstack_sym in l['callstack_syms']:
-                    if callstack_sym and callstack_sym.name in arch.syscall_entry_points:
-                        break
+                # Check if callstack_syms exists before accessing it
+                if 'callstack_syms' in l:
+                    for callstack_sym in l['callstack_syms']:
+                        if callstack_sym and callstack_sym.name in arch.syscall_entry_points:
+                            break
 
-                    if (callstack_sym is None or
-                        self.angr_mgr.is_noprobe_sym(callstack_sym) or
-                        (syms is not None and callstack_sym not in syms|entry_syms|ignored_caller_syms)):
-                        untracked = 1
-                        break
+                        if (callstack_sym is None or
+                            self.angr_mgr.is_noprobe_sym(callstack_sym) or
+                            (syms is not None and callstack_sym not in syms|entry_syms|ignored_caller_syms)):
+                            untracked = 1
+                            break
 
                 if untracked > 0:
                     continue
@@ -419,6 +432,16 @@ class KProbesRecorder(Recorder):
         self.restart_syscall(process, failing_syscall)
         pr_msg('Waiting for syscall to complete...', level='DEBUG')
         syscall = self.wait_for_syscall(process)
+        
+        # Give kernel time to record the syscall exit event
+        # ptrace returns before the kernel writes the event to the trace buffer
+        time.sleep(0.01)  # 10ms should be enough
+        
+        # Trigger snapshot to capture the complete trace
+        # We're reproducing a known failure, so always trigger
+        pr_msg('Triggering snapshot...', level='DEBUG')
+        ftrace.snapshot_file.write_text('1')
+        
         pr_msg('Disabling tracing...', level='DEBUG')
         ftrace.tracing_on = False
 

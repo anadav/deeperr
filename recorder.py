@@ -120,15 +120,16 @@ class Recorder:
         if filter is not None:
             pr_msg(f'Filter expression: {filter}', level='DEBUG')
         syscall_event = ftrace_instance.get_event(event_name)
+        # Enable the event so it captures data
+        syscall_event.enable = True
+        pr_msg(f'Enabled event: {event_name}', level='DEBUG')
         if filter is not None:
             import time
             start_time = time.time()
             syscall_event.filter = filter
             pr_msg(f'Filter set in {time.time() - start_time:.2f}s', level='DEBUG')
-            if snapshot:
-                start_time = time.time()
-                syscall_event.trigger = f'snapshot if {filter}'
-                pr_msg(f'Trigger set in {time.time() - start_time:.2f}s', level='DEBUG')
+            # Don't use snapshot triggers - they're unreliable with filters on many kernels
+            # We'll manually trigger snapshot after detecting failure via ptrace
         return syscall_event
 
     def restart_syscall(self, process: ptrace.debugger.process.PtraceProcess, syscall: PtraceSyscall) -> None:
@@ -200,15 +201,13 @@ class Recorder:
 
         enter_or_exit = 'enter' if not exit else 'exit'
 
+        # Always use raw_syscalls - specific syscall events are unreliable on many systems
         e_class, e_subclass = 'raw_syscalls', f'sys_{enter_or_exit}'
         if self.syscall_filter is not None:
-            syscall_name = SYSCALL_NAMES.get(self.syscall_filter, None)
-            if syscall_name is not None:
-                if syscall_name in self.syscall_special_event:
-                    syscall_name = self.syscall_special_event[syscall_name]
-
-                e_class, e_subclass = 'syscalls', f'sys_{enter_or_exit}_{syscall_name}'
+            # Add syscall ID filter for raw syscalls
+            if filter:
+                filter += f' && id=={self.syscall_filter}'
             else:
-                filter += f'&&id=={self.syscall_filter}'
+                filter = f'id=={self.syscall_filter}'
 
         return e_class, e_subclass, filter if filter != '' else None
