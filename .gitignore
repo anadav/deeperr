@@ -13,6 +13,8 @@
 !LICENSE
 !CONTRIBUTING_DCO.md
 !uv.lock
+!tests/
+!tests/**
 
 # Virtual environments (explicitly ignore)
 .venv/
@@ -20,3 +22,15 @@ myvenv/
 venv/
 __pycache__/
 *.pyc
+
+# Test artifacts
+tests/output/
+tests/c_programs/test_fail
+tests/c_programs/test_mkdir
+tests/c_programs/test_multiple_failures
+tests/c_programs/test_fail_binary
+*.out
+*.err
+test_results_*.json
+deeperr.data
+deeperr.log

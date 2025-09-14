@@ -220,6 +220,20 @@ on GitHub, and we'll do our best to assist you.
 We also welcome contributions to improve documentation. If you would like to
 contribute, please see the "Contributing" section for guidelines.
 
+## Testing
+
+The project includes a comprehensive test suite in the `tests/` directory. See [tests/README.md](tests/README.md) for details on running tests.
+
+Quick test:
+```bash
+./tests/quick_test.sh
+```
+
+Full test suite:
+```bash
+uv run python3 tests/run_tests.py
+```
+
 ## Contributing
 
 The syscall-failure-analyzer project team welcomes contributions from the community. Before you start working with syscall-failure-analyzer, please
