@@ -10,58 +10,25 @@ import pickle
 import sys
 import io
 import subprocess
-import shutil
 from typing import Optional, Set, List, Any, Dict, Union
 
-# Minimal pr_msg for install mode (doesn't require tqdm or other dependencies)
-def pr_msg_minimal(msg, level='INFO'):
-    """Minimal print message function for install mode"""
-    colors = {
-        'INFO': '\033[0m',      # Default
-        'WARN': '\033[33m',     # Yellow
-        'ERROR': '\033[31m',    # Red
-        'FATAL': '\033[31m',    # Red
-        'DEBUG': '\033[90m',    # Gray
-    }
-    color = colors.get(level, '\033[0m')
-    reset = '\033[0m'
-    print(f"{color}{msg}{reset}")
-
-# Use minimal pr_msg by default
-pr_msg = pr_msg_minimal
-quiet = lambda: None
-warn_once = lambda: None
-change_output = lambda x: None
-set_debug = lambda x=None: None  # Accept optional argument
-set_quiet = lambda x=None: None   # Accept optional argument
-
-# Defer heavy imports until needed to allow install mode to work without venv
-def load_analysis_modules():
-    """Load modules needed for record/report operations (not needed for install)"""
-    global Angr, Addr2Line, IntelPTRecorder, IntelPTReporter, Kallsyms, get_vmlinux
-    global KProbesRecorder, KprobesReporter, Reporter, createChild, locateProgram
-    global ErrorcodeInfo, SyscallInfo, Kcore, Ftrace, lz4
-    global pr_msg, quiet, warn_once, change_output, set_debug, set_quiet
-    
-    # Import the real prmsg functions now that we're loading full dependencies
-    from prmsg import pr_msg as pr_msg_real, quiet, warn_once, change_output, set_debug, set_quiet
-    pr_msg = pr_msg_real  # Replace minimal version with real one
-    
-    import lz4.frame
-    from angrmgr import Angr
-    from addr2line import Addr2Line
-    import claripy.backends.backend_smtlib_solvers  # Required for angr's solver system
-    from intelptrecorder import IntelPTRecorder
-    from intelptreporter import IntelPTReporter
-    from kallsyms import Kallsyms, get_vmlinux
-    from kprobesrecorder import KProbesRecorder
-    from kprobesreporter import KprobesReporter
-    from reporter import Reporter
-    from ptrace.debugger.child import createChild
-    from ptrace.tools import locateProgram
-    from syscall import ErrorcodeInfo, SyscallInfo
-    from kcore import Kcore
-    from ftrace import Ftrace
+# Import all modules directly
+import lz4.frame
+from prmsg import pr_msg, quiet, warn_once, change_output, set_debug, set_quiet
+from angrmgr import Angr
+from addr2line import Addr2Line
+import claripy.backends.backend_smtlib_solvers  # Required for angr's solver system
+from intelptrecorder import IntelPTRecorder
+from intelptreporter import IntelPTReporter
+from kallsyms import Kallsyms, get_vmlinux
+from kprobesrecorder import KProbesRecorder
+from kprobesreporter import KprobesReporter
+from reporter import Reporter
+from ptrace.debugger.child import createChild
+from ptrace.tools import locateProgram
+from syscall import ErrorcodeInfo, SyscallInfo
+from kcore import Kcore
+from ftrace import Ftrace
 
 DEFAULT_DATA_FILENAME = 'deeperr.data'
 
@@ -181,7 +148,7 @@ def main() -> None:
     parser.add_argument('--path', '-p', action='store', dest='src_path', default=None, type=valid_path, help='path to source code')
     parser.add_argument('--nokcore', '-w', action='store_true', dest='nokcore', help='do not save kcore')
     parser.add_argument('--early-stop', '-e', action='store_true', dest='early_stop', help='stop execution after first failure')
-    parser.add_argument('command', choices=['record', 'report', 'install'], help='command to run: record, report, or install')
+    parser.add_argument('command', choices=['record', 'report'], help='command to run: record or report')
 
     parser.usage = parser.format_usage()[7:].rstrip('\n ') + ' -- <command> [args]\n'
 
@@ -191,22 +158,28 @@ def main() -> None:
         # Exit with error
         exit(1)
 
-    if args.command == 'install':
-        if os.geteuid() != 0:
-            pr_msg(f'Install mode must be run as root', level='FATAL')
-            exit(1)
-    else:
-        # Load heavy dependencies only for record/report modes
-        load_analysis_modules()
+    # No longer need conditional loading since install mode is removed
     
     if os.geteuid() != 0 and args.command in ['record', 'report']:
+        # Check if kptr_restrict is set (which hides kernel addresses)
+        try:
+            with open('/proc/sys/kernel/kptr_restrict', 'r') as f:
+                kptr_restrict = int(f.read().strip())
+                if kptr_restrict != 0:
+                    pr_msg(f'kernel.kptr_restrict is set to {kptr_restrict}, which hides kernel addresses', level='FATAL')
+                    pr_msg(f'Run "sudo ./install_permissions.sh" to configure the system properly', level='INFO')
+                    pr_msg(f'Or run with sudo: sudo {" ".join(sys.argv)}', level='INFO')
+                    exit(1)
+        except (FileNotFoundError, ValueError, IOError):
+            pass  # If we can't read it, continue and let other checks handle it
+
         # Check if capabilities are set on the real Python binary
         real_python = os.path.realpath(sys.executable)
         try:
             result = subprocess.run(['getcap', real_python], capture_output=True, text=True)
             if 'cap_sys_rawio' not in result.stdout:
                 pr_msg(f'This tool requires root privileges or proper capabilities.', level='FATAL')
-                pr_msg(f'Run "sudo {sys.executable} {__file__} install" to set up permissions.', level='INFO')
+                pr_msg(f'Run "sudo ./install_permissions.sh" to set up permissions for unprivileged access.', level='INFO')
                 exit(1)
         except (subprocess.CalledProcessError, FileNotFoundError):
             pr_msg(f'This tool requires root privileges.', level='FATAL')
@@ -230,214 +203,7 @@ def main() -> None:
     logging.basicConfig(filename='deeperr.log', level=loglevel, force=True)
     logging.getLogger().setLevel(loglevel)
     
-    if args.command == 'install':
-        pr_msg('Setting up permissions for unprivileged users...', level='INFO')
-        
-        # Set perf_event_paranoid to -1
-        try:
-            with open('/proc/sys/kernel/perf_event_paranoid', 'w') as f:
-                f.write('-1')
-            pr_msg('Set /proc/sys/kernel/perf_event_paranoid to -1', level='INFO')
-        except Exception as e:
-            pr_msg(f'Failed to set perf_event_paranoid: {e}', level='ERROR')
-        
-        # Set kptr_restrict to 0 to allow reading kernel addresses
-        try:
-            with open('/proc/sys/kernel/kptr_restrict', 'w') as f:
-                f.write('0')
-            pr_msg('Set /proc/sys/kernel/kptr_restrict to 0 (kernel addresses visible)', level='INFO')
-        except Exception as e:
-            pr_msg(f'Failed to set kptr_restrict: {e}', level='ERROR')
-        
-        # Make /proc/kcore readable by changing permissions temporarily
-        # This is a security risk but necessary for perf --kcore to work
-        try:
-            subprocess.run(['chmod', '444', '/proc/kcore'], check=True, capture_output=True, text=True)
-            pr_msg('Made /proc/kcore world-readable (temporary, resets on reboot)', level='INFO')
-            pr_msg('  WARNING: This reduces system security', level='WARN')
-        except subprocess.CalledProcessError as e:
-            pr_msg(f'Failed to change /proc/kcore permissions: {e.stderr}', level='ERROR')
-        
-        # Set ptrace_scope to 0 to allow ptrace
-        ptrace_scope_path = '/proc/sys/kernel/yama/ptrace_scope'
-        if os.path.exists(ptrace_scope_path):
-            try:
-                with open(ptrace_scope_path, 'w') as f:
-                    f.write('0')
-                pr_msg('Set ptrace_scope to 0 (allows ptrace)', level='INFO')
-            except Exception as e:
-                pr_msg(f'Failed to set ptrace_scope: {e}', level='ERROR')
-        
-        # Check if debugfs is mounted at /sys/kernel/debug
-        debugfs_path = '/sys/kernel/debug'
-        if not os.path.exists(os.path.join(debugfs_path, 'tracing')):
-            pr_msg('debugfs not mounted or tracing not available', level='WARN')
-            try:
-                # Try to mount debugfs
-                subprocess.run(['mount', '-t', 'debugfs', 'none', debugfs_path],
-                             check=True, capture_output=True, text=True)
-                pr_msg(f'Mounted debugfs at {debugfs_path}', level='INFO')
-            except subprocess.CalledProcessError:
-                pr_msg('Could not mount debugfs, kprobes may not work', level='WARN')
-        else:
-            pr_msg('debugfs already mounted with tracing support', level='INFO')
-        
-        # Set permissions on tracing directory
-        tracing_path = os.path.join(debugfs_path, 'tracing')
-        if os.path.exists(tracing_path):
-            try:
-                # Make tracing accessible (this might not persist across reboots)
-                subprocess.run(['chmod', '-R', 'a+rX', tracing_path],
-                             check=True, capture_output=True, text=True)
-                pr_msg(f'Set read permissions on {tracing_path}', level='INFO')
-            except subprocess.CalledProcessError as e:
-                pr_msg(f'Could not set permissions on tracing: {e.stderr}', level='WARN')
-        
-        # Make it persistent across reboots
-        try:
-            sysctl_conf = '/etc/sysctl.d/99-syscall-analyzer.conf'
-            with open(sysctl_conf, 'w') as f:
-                f.write('# Configuration for syscall-failure-analyzer\n')
-                f.write('kernel.perf_event_paranoid = -1\n')
-            pr_msg(f'Created {sysctl_conf} for persistent settings', level='INFO')
-        except Exception as e:
-            pr_msg(f'Failed to create sysctl config: {e}', level='ERROR')
-        
-        # Find the actual Python executable that will be used
-        python_path = sys.executable
-        pr_msg(f'Current Python executable: {python_path}', level='INFO')
-        
-        # Find the real Python binary (resolve all symlinks)
-        real_python_path = os.path.realpath(python_path)
-        pr_msg(f'Real Python binary: {real_python_path}', level='INFO')
-        
-        # Also check which python3 to handle different environments
-        which_python = shutil.which('python3')
-        if which_python:
-            which_python_real = os.path.realpath(which_python)
-            pr_msg(f'System python3: {which_python_real}', level='INFO')
-        
-        # Set capabilities on the real Python executable
-        # Add cap_perfmon for perf/ftrace access, cap_bpf for BPF programs, cap_dac_override to read /proc/kcore
-        capabilities = 'cap_sys_rawio,cap_sys_admin,cap_sys_ptrace,cap_dac_read_search,cap_dac_override,cap_perfmon,cap_bpf,cap_net_admin+ep'
-        try:
-            subprocess.run(['setcap', capabilities, real_python_path], 
-                         check=True, capture_output=True, text=True)
-            pr_msg(f'Set capabilities on {real_python_path}', level='INFO')
-        except subprocess.CalledProcessError as e:
-            pr_msg(f'Failed to set capabilities on {real_python_path}: {e.stderr}', level='ERROR')
-            # Try with a reduced set of capabilities for older kernels
-            try:
-                fallback_caps = 'cap_sys_rawio,cap_sys_admin,cap_sys_ptrace,cap_dac_read_search,cap_dac_override+ep'
-                subprocess.run(['setcap', fallback_caps, real_python_path],
-                             check=True, capture_output=True, text=True)
-                pr_msg(f'Set reduced capabilities on {real_python_path} (older kernel)', level='INFO')
-            except subprocess.CalledProcessError as e2:
-                pr_msg(f'Failed to set any capabilities: {e2.stderr}', level='ERROR')
-                pr_msg(f'You may need to manually set capabilities on your Python binary', level='WARN')
-        
-        # Find perf executable and set capabilities
-        # Use the --perf argument if provided, otherwise find the default perf
-        perf_path = args.perf if args.perf != 'perf' else shutil.which('perf')
-        
-        if perf_path:
-            # Check if perf_path is a wrapper script and find the real binary
-            real_perf_paths: List[str] = []
-            
-            # Check if it's the standard Ubuntu perf wrapper
-            if os.path.isfile(perf_path):
-                try:
-                    with open(perf_path, 'r') as f:
-                        first_line = f.readline()
-                    if first_line.startswith('#!/bin/bash'):
-                        # It's likely a wrapper script, find the real perf binary
-                        import platform
-                        kernel_version = platform.release()
-                        
-                        # Try standard Ubuntu locations
-                        possible_paths = [
-                            f'/usr/lib/linux-tools/{kernel_version}/perf',
-                            f'/usr/lib/linux-tools-{kernel_version}/perf',
-                        ]
-                        
-                        # Also check what the wrapper would execute
-                        for path in possible_paths:
-                            if os.path.exists(path):
-                                # Resolve any symlinks
-                                real_path = os.path.realpath(path)
-                                if os.path.exists(real_path):
-                                    real_perf_paths.append(real_path)
-                        
-                        # Also add the wrapper itself
-                        real_perf_paths.append(perf_path)
-                    else:
-                        # It's the actual binary
-                        real_perf_paths = [perf_path]
-                except (IOError, OSError):
-                    real_perf_paths = [perf_path]
-            else:
-                real_perf_paths = [perf_path]
-            
-            # Remove duplicates while preserving order
-            seen: Set[str] = set()
-            unique_perf_paths: List[str] = []
-            for path in real_perf_paths:
-                if path not in seen:
-                    seen.add(path)
-                    unique_perf_paths.append(path)
-            
-            for perf_binary in unique_perf_paths:
-                try:
-                    # Skip if it's a script
-                    if os.path.isfile(perf_binary):
-                        with open(perf_binary, 'rb') as fb:
-                            # Check if it's an ELF binary (starts with magic bytes)
-                            magic = fb.read(4)
-                            if magic != b'\x7fELF':
-                                pr_msg(f'Skipping {perf_binary} (not an ELF binary)', level='INFO')
-                                continue
-                    
-                    # perf needs cap_sys_rawio and cap_dac_override to read /proc/kcore, cap_perfmon for performance monitoring
-                    perf_caps = 'cap_sys_rawio,cap_sys_admin,cap_sys_ptrace,cap_syslog,cap_dac_override,cap_perfmon,cap_ipc_lock+ep'
-                    subprocess.run(['setcap', perf_caps, perf_binary],
-                                 check=True, capture_output=True, text=True)
-                    pr_msg(f'Set capabilities on {perf_binary}', level='INFO')
-                except subprocess.CalledProcessError as e:
-                    pr_msg(f'Failed to set capabilities on {perf_binary}: {e.stderr}', level='ERROR')
-                    # Try with reduced capabilities for older kernels
-                    try:
-                        fallback_perf_caps = 'cap_sys_rawio,cap_sys_admin,cap_sys_ptrace,cap_syslog,cap_dac_override+ep'
-                        subprocess.run(['setcap', fallback_perf_caps, perf_binary],
-                                     check=True, capture_output=True, text=True)
-                        pr_msg(f'Set reduced capabilities on {perf_binary} (older kernel)', level='INFO')
-                    except subprocess.CalledProcessError as e2:
-                        pr_msg(f'Failed to set any capabilities on {perf_binary}: {e2.stderr}', level='ERROR')
-                except Exception as e:
-                    pr_msg(f'Error processing {perf_binary}: {e}', level='ERROR')
-        else:
-            pr_msg('perf not found in PATH', level='WARN')
-        
-        # Create a helper script for running without sudo
-        script_path = os.path.abspath(__file__)
-        helper_script = os.path.join(os.path.dirname(script_path), 'syscall-analyzer')
-        try:
-            with open(helper_script, 'w') as f:
-                f.write('#!/bin/bash\n')
-                f.write(f'# Helper script for syscall-failure-analyzer\n')
-                f.write(f'exec {python_path} {script_path} "$@"\n')
-            os.chmod(helper_script, 0o755)
-            pr_msg(f'Created helper script: {helper_script}', level='INFO')
-        except Exception as e:
-            pr_msg(f'Failed to create helper script: {e}', level='ERROR')
-        
-        pr_msg('\nInstallation complete!', level='INFO')
-        pr_msg('You can now run the tool without sudo:', level='INFO')
-        pr_msg(f'  {helper_script} record --syscall <syscall> -- <command>', level='INFO')
-        pr_msg(f'  {helper_script} report', level='INFO')
-        pr_msg('\nNote: Some features may still require elevated privileges.', level='WARN')
-        pr_msg('If you encounter permission issues, try running with sudo.', level='WARN')
-        return  # Exit after install completes
-    
+    # Install mode has been moved to install_permissions.sh
     # The rest of the code is for record/report commands
     for l in ['angr', 'cle', 'pyvex', 'claripy']:
         logging.getLogger(l).setLevel('ERROR')

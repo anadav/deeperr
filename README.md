@@ -107,10 +107,10 @@ This tool requires elevated privileges to access system features like kcore and 
 
 ##### Option 1: One-time Installation (Recommended)
 
-Run the install mode once with sudo to set up permissions for unprivileged users:
+Run the install script once with sudo to set up permissions for unprivileged users:
 
 ```bash
-sudo /path/to/venv/bin/python3 ./syscall-failure-analyzer.py install
+sudo ./install_permissions.sh
 ```
 
 This will:
@@ -125,14 +125,15 @@ After installation, you can run the tool without sudo using the generated helper
 
 Alternatively, you can run the tool with sudo permissions each time.
 
-#### Virtual Environment Setup
+#### Environment Setup
 
-To set up and run the project, it's advisable to use a Python virtual
-environment.
+This project uses [uv](https://github.com/astral-sh/uv) for dependency management. uv is a fast Python package installer and resolver written in Rust that simplifies dependency management.
 
-1. **Install python3-venv package**
+1. **Install uv**
    ```bash
-   sudo apt install python3-venv
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   # Or using pipx (recommended):
+   # pipx install uv
    ```
 
 2. **Navigate to the Project Directory**
@@ -140,56 +141,37 @@ environment.
     cd /path/to/syscall-failure-analyzer
     ```
 
-3. **Create a Virtual Environment**
+3. **Install Dependencies**
     ```bash
-    python3 -m venv myvenv
+    uv sync
+    ./setup_bcc.sh  # Setup BCC symlink (only needed once)
     ```
+    That's it! No need to manually create or activate virtual environments. uv handles everything automatically.
 
-4. **Activate the Virtual Environment**
-    ```bash
-    source myvenv/bin/activate
-    ```
-
-5. **Install Required Packages**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-6. **Create a Symbolic Link for BCC**
-
-    ```bash
-    ln -s /usr/lib/python3/dist-packages/bcc myvenv/lib/$(python3 -c "import sys; print('python{}.{}'.format(sys.version_info.major, sys.version_info.minor))")/site-packages/bcc
-    ```
-
-7. **Run Install Mode (Optional but Recommended)**
-
-    After setting up the virtual environment, run the install mode to configure permissions:
-    ```bash
-    sudo myvenv/bin/python3 ./syscall-failure-analyzer.py install
-    ```
+4. **Run the Tool**
     
-    This allows you to run the tool without sudo in the future.
+    You can run the tool directly without activating any virtual environment:
+    ```bash
+    uv run python3 ./syscall-failure-analyzer.py --help
+    ```
+
+5. **Optional: Manual Virtual Environment Activation**
+    
+    If you prefer to work with an activated environment:
+    ```bash
+    source .venv/bin/activate
+    python3 ./syscall-failure-analyzer.py --help
+    deactivate  # When done
+    ```
 
 #### Recording Syscall Failure
-
-Before deploying or running the project, ensure the virtual environment is activated. If it's not, activate it using:
-
-```bash
-source myvenv/bin/activate
-```
 
 To record syscall failures, use the following command. This example targets the
 first failure of `setregid` syscall when running Linux Test Project's `setregid03`
 test:
 
-**If you ran the install mode:**
 ```bash
-./syscall-analyzer --kprobes --syscall=setregid -n 1 record /opt/ltp/testcases/bin/setregid03
-```
-
-**If you didn't run install mode:**
-```bash
-sudo python3 ./syscall-failure-analyzer.py --kprobes --syscall=setregid -n 1 record /opt/ltp/testcases/bin/setregid03
+uv run python3 ./syscall-failure-analyzer.py --kprobes --syscall=setregid -n 1 record /opt/ltp/testcases/bin/setregid03
 ```
 
 > Note: Use the `--kprobes` flag for recording with kprobe points. If Intel PT is supported and you prefer to use it, omit the `--kprobes` flag.
@@ -198,14 +180,8 @@ sudo python3 ./syscall-failure-analyzer.py --kprobes --syscall=setregid -n 1 rec
 
 After recording, generate a report using the following command:
 
-**If you ran the install mode:**
 ```bash
-./syscall-analyzer --syscall=setregid report
-```
-
-**If you didn't run install mode:**
-```bash
-sudo python3 ./syscall-failure-analyzer.py --syscall=setregid report
+uv run python3 ./syscall-failure-analyzer.py --syscall=setregid report
 ```
 
 #### Command-line Arguments

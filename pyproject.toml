@@ -1,0 +1,38 @@
+[project]
+name = "syscall-failure-analyzer"
+version = "1.0.0"
+description = "A kernel syscall failure analysis tool using ftrace and kprobes"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "setuptools>=68.0.0",
+    "angr==9.2.25",
+    "ansicolors==1.1.8",
+    "capstone==4.0.2",
+    "claripy==9.2.25",
+    "cle==9.2.25",
+    "numpy",
+    "lz4==4.3.2",
+    "pyelftools==0.29",
+    "psutil==5.9.4",
+    "pyseccomp==0.1.2",
+    "pytest==7.2.2",
+    "python-ptrace==0.9.8",
+    "tqdm==4.64.1",
+    "intervaltree==3.1.0",
+    "zstandard",
+    "lief",
+]
+
+[project.scripts]
+syscall-analyzer = "syscall_failure_analyzer:main"
+deeperr = "syscall_failure_analyzer:main"
+
+[tool.uv]
+prerelease = "allow"  # Required for unicorn==1.0.2rc4 dependency from angr
+dev-dependencies = [
+    "pytest>=7.2.2",
+]
+
+[build-system]
+requires = ["setuptools>=68.0.0"]
+build-backend = "setuptools.build_meta"

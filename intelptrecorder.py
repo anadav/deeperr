@@ -141,15 +141,18 @@ class IntelPTRecorder(Recorder):
             # Check for specific kcore error
             if "kcore is not readable" in perf_output_str:
                 pr_msg("", level="ERROR")
-                pr_msg("ERROR: /proc/kcore is not readable. This is required for Intel PT recording.", level="ERROR")
+                pr_msg("ERROR: perf cannot access /proc/kcore. This is required for Intel PT recording.", level="ERROR")
                 pr_msg("", level="ERROR")
-                pr_msg("To fix this, run the install mode with sudo:", level="ERROR")
-                pr_msg("  sudo python3 ./syscall-failure-analyzer.py install", level="ERROR")
+                pr_msg("This is a known issue with perf requiring elevated privileges for --kcore access.", level="ERROR")
                 pr_msg("", level="ERROR")
-                pr_msg("This will configure the necessary permissions for unprivileged users.", level="ERROR")
-                pr_msg("After running install mode, you can use the tool without sudo.", level="ERROR")
+                pr_msg("Solutions:", level="ERROR")
+                pr_msg("  1. Run with sudo: sudo $(which uv) run python3 ./syscall-failure-analyzer.py ...", level="ERROR")
+                pr_msg("  2. Use kprobes mode instead: add --kprobes flag (slower but works without root)", level="ERROR")
                 pr_msg("", level="ERROR")
-                pr_msg("Note: Install mode works without virtual environment dependencies.", level="ERROR")
+                pr_msg("If on Ubuntu and AppArmor is blocking perf:", level="ERROR")
+                pr_msg("  sudo aa-complain /usr/bin/perf", level="ERROR")
+                pr_msg("", level="ERROR")
+                pr_msg("Note: Even with capabilities set, perf's --kcore flag typically requires root.", level="ERROR")
             else:
                 pr_msg(f"hint: check that perf that is compatible with the current kernel was provided", level="WARN")
             

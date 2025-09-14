@@ -44,18 +44,54 @@ def get_vmlinux(user_option:Optional[List[io.BufferedReader]]) -> List[io.Buffer
         except PermissionError:
             pr_msg(f'Could not open vmlinux file {vmlinux}', level='ERROR')
 
+    # Detect the OS distribution to provide specific instructions
+    install_cmd = "Install kernel debug symbols using the appropriate command for your distribution"
+
+    # Try to detect the distribution
+    try:
+        # Check /etc/os-release for distribution info
+        if os.path.exists('/etc/os-release'):
+            with open('/etc/os-release', 'r') as f:
+                os_info = f.read().lower()
+                kernel_version = os.uname().release
+
+                if 'ubuntu' in os_info or 'debian' in os_info:
+                    install_cmd = f"sudo apt install linux-image-{kernel_version}-dbgsym"
+                    if 'ubuntu' in os_info:
+                        install_cmd += "\n\nIf not found, enable debug repositories first:\n"
+                        install_cmd += "  echo 'deb http://ddebs.ubuntu.com $(lsb_release -cs) main' | \\\n"
+                        install_cmd += "    sudo tee /etc/apt/sources.list.d/ddebs.list\n"
+                        install_cmd += "  sudo apt update"
+                elif 'fedora' in os_info or 'red hat' in os_info or 'rhel' in os_info or 'centos' in os_info:
+                    install_cmd = "sudo dnf debuginfo-install kernel"
+                elif 'arch' in os_info or 'manjaro' in os_info:
+                    install_cmd = "sudo pacman -S linux-headers"
+                elif 'gentoo' in os_info:
+                    install_cmd = "sudo emerge -av sys-kernel/linux-headers"
+                elif 'suse' in os_info or 'opensuse' in os_info:
+                    install_cmd = "sudo zypper install kernel-default-debuginfo"
+                else:
+                    # Fallback to showing common commands
+                    install_cmd = f"""Install kernel debug symbols for kernel {kernel_version}:
+    Ubuntu/Debian:  sudo apt install linux-image-{kernel_version}-dbgsym
+    Fedora/RHEL:    sudo dnf debuginfo-install kernel
+    Arch Linux:     sudo pacman -S linux-headers
+    OpenSUSE:       sudo zypper install kernel-default-debuginfo"""
+    except:
+        # If detection fails, show generic message
+        kernel_version = os.uname().release
+        install_cmd = f"""Install kernel debug symbols for kernel {kernel_version}:
+    Ubuntu/Debian:  sudo apt install linux-image-{kernel_version}-dbgsym
+    Fedora/RHEL:    sudo dnf debuginfo-install kernel
+    Arch Linux:     sudo pacman -S linux-headers"""
+
     pr_msg('ERROR: vmlinux file is required but could not be found', level='ERROR')
-    pr_msg('''The vmlinux file must be available in one of these locations:
-    - /usr/lib/debug/boot/vmlinux-$(uname -r)
-    - /boot/vmlinux-$(uname -r)
+    pr_msg(f'''The vmlinux file must be available in one of these locations:
+    - /usr/lib/debug/boot/vmlinux-{os.uname().release}
+    - /boot/vmlinux-{os.uname().release}
     - Or specify it using: --vmlinux /path/to/vmlinux
-    
-Install kernel debug symbols using:
-    sudo apt install linux-image-$(uname -r)-dbgsym [deb/ubuntu]
-    sudo dnf debuginfo-install kernel [fedora]
-    sudo pacman -S linux-headers [arch]
-    sudo emerge -av sys-kernel/linux-headers [gentoo]
-            ''', level='ERROR')
+
+{install_cmd}''', level='ERROR')
     sys.exit(1)
 
 def find_module_dbg(module_name:str):

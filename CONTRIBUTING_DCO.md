@@ -36,10 +36,11 @@ This section provides a comprehensive guide on how to contribute to the project 
     cd your-repository
     ```
 
-3. **Install Required Packages:** Use `pip` to install the required Python packages:
+3. **Install Required Packages:** Use `uv` to install the required Python packages:
 
     ```bash
-    pip install -r requirements.txt
+    uv sync
+    ./setup_bcc.sh
     ```
 
 ### Ensuring Code Quality

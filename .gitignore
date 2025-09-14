@@ -1,9 +1,22 @@
 # Ignore everything in this directory
 *
-# Except this file
+# Except these files
 !.gitignore
 !*.py
 !setup.cfg
 !*.c
 !mypy.ini
 !*.txt
+!*.md
+!*.toml
+!*.sh
+!LICENSE
+!CONTRIBUTING_DCO.md
+!uv.lock
+
+# Virtual environments (explicitly ignore)
+.venv/
+myvenv/
+venv/
+__pycache__/
+*.pyc
